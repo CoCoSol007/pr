@@ -1,0 +1,7 @@
+= DSH: Distributed Shell
+
+DSH enables secure shell operations across distributed systems with built-in multi-session management and authentication.
+
+== License
+
+Mozilla Public License Version 2.0 (MPL-2.0)
