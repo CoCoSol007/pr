@@ -4,3 +4,5 @@
 
 /target
 .direnv/
+
+/result
