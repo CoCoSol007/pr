@@ -1,10 +1,7 @@
 # SPDX-FileCopyrightText: 2025 Lukas <lukasku@proton.me>
-# SPDX-FileCopyrightText: 2025 NightProg <tonio.barbier@gmail.com>
 # SPDX-License-Identifier: MPL-2.0
 
 {
-  description = "The DSH Communication Protocol";
-
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs";
     flake-utils = {
@@ -43,14 +40,14 @@
 
       formatter = pkgs.alejandra;
 
-      dsh = naersk-lib.buildPackage {
-        name = "dsh";
+      pr = naersk-lib.buildPackage {
+        name = "pr";
         src = ./.;
       };
     in {
       inherit formatter;
-      packages.dsh = dsh;
-      defaultPackage = self.packages.${system}.dsh;
+      packages.pr = pr;
+      defaultPackage = self.packages.${system}.pr;
 
       devShell = pkgs.mkShell rec {
         packages = with pkgs; [toolchain rustup pre-commit];

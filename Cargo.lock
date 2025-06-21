@@ -3,5 +3,17 @@
 version = 4
 
 [[package]]
-name = "dsh"
+name = "common"
+version = "0.1.0"
+
+[[package]]
+name = "pr"
+version = "0.1.0"
+
+[[package]]
+name = "pr-client"
+version = "0.1.0"
+
+[[package]]
+name = "pr-server"
 version = "0.1.0"

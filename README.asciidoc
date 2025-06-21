@@ -1,0 +1,8 @@
+ΠP
+==
+
+Polyrhoé (PRH or `pr`), from the Greek πολύς (many) and ῥοή (flow), is a protocol for multiplexing simultaneous shell connections to multiple remote hosts.
+
+License
+-------
+PR is licensed under the https://www.mozilla.org/en-US/MPL/2.0/[MPL-2.0] (Mozilla Public License 2.0). See the LICENSE file for mode details.

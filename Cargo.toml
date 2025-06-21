@@ -1,18 +1,16 @@
 # SPDX-FileCopyrightText: 2025 Lukas <lukasku@proton.me>
-# SPDX-FileCopyrightText: 2025 NightProg <tonio.barbier@gmail.com>
 # SPDX-License-Identifier: MPL-2.0
 
 [package]
-name = "dsh"
+name = "pr"
 version = "0.1.0"
 edition = "2024"
 
 [dependencies]
 
-[[bin]]
-name = "dsh-client"
-path = "src/client.rs"
-
-[[bin]]
-name = "dsh-server"
-path = "src/server.rs"
+[workspace]
+members = [
+    "crates/pr-client",
+    "crates/pr-server",
+    "crates/common"
+]
