@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 common = { path = "../common" }
+nix = { version = "0.30.1", features = ["term", "fs", "process", "signal"] }
 tokio = { version = "1.45.1", features = ["full"] }
 serde = { version = "1.0.219", features = ["derive"] }
 aes-gcm = "0.10.3"

@@ -1,10 +1,8 @@
 // SPDX-FileCopyrightText: 2025 Lukas <lukasku@proton.me>
 // SPDX-License-Identifier: MPL-2.0
 
-#[warn(non_camel_case_types)]
-
-use serde::{Deserialize, Serialize};
 use bincode::{Decode, Encode};
+use serde::{Deserialize, Serialize};
 
 #[repr(u8)]
 #[derive(Debug, PartialEq, Encode, Decode, Serialize, Deserialize)]

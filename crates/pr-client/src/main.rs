@@ -1,14 +1,14 @@
 // SPDX-FileCopyrightText: 2025 Lukas <lukasku@proton.me>
 // SPDX-License-Identifier: MPL-2.0
 
-mod stream;
 mod cli;
+mod stream;
 
 use aes_gcm::{Aes256Gcm, KeyInit};
-use common::cipher::{send_encrypted_packet};
-use common::rw::get_input;
-use common::packet::{Packet, serialize_packet, deserialize_packet, get_packet_length};
+use common::cipher::send_encrypted_packet;
 use common::codes::Codes;
+use common::packet::{Packet, deserialize_packet, get_packet_length, serialize_packet};
+use common::rw::get_input;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::io;
@@ -46,9 +46,11 @@ async fn main() {
                     let port = get_input("Enter the port to listen on (default 1736) : ");
                     let port = port.trim().parse::<u16>().unwrap_or(1736);
 
-                    connexion(&mut connections, address.to_string(), port.to_string()).await.unwrap_or_else(|e| {
-                        println!("Error connecting: {}", e);
-                    });
+                    connexion(&mut connections, address.to_string(), port.to_string())
+                        .await
+                        .unwrap_or_else(|e| {
+                            println!("Error connecting: {}", e);
+                        });
                 }
                 2 => {
                     if connections.is_empty() {
@@ -109,7 +111,11 @@ async fn main() {
     }
 }
 
-async fn connexion(connections: &mut HashMap<String, stream::Stream>, address: String, port: String) -> io::Result<()> {
+async fn connexion(
+    connections: &mut HashMap<String, stream::Stream>,
+    address: String,
+    port: String,
+) -> io::Result<()> {
     match TcpStream::connect(format!("{}:{}", address, port)).await {
         Ok(stream) => {
             let name = loop {
@@ -177,10 +183,10 @@ async fn setup_secure_connection(mut stream: TcpStream) -> io::Result<stream::St
 
     let response_packet = deserialize_packet(&response_buf)?;
 
-    if response_packet.opcode != Codes::PUBLIC_KEY_RESPONSE {
+    if response_packet.code != Codes::PUBLIC_KEY_RESPONSE {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            "Unexpected opcode in response",
+            "Unexpected code in response",
         ));
     }
 

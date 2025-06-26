@@ -2,10 +2,10 @@
 // SPDX-License-Identifier: MPL-2.0
 
 use super::codes::Codes;
-use std::io;
 use bincode::{self, config};
 use bincode::{Decode, Encode};
 use serde::{Deserialize, Serialize};
+use std::io;
 use tokio::io::AsyncReadExt;
 use tokio::net::TcpStream;
 
@@ -13,7 +13,7 @@ use tokio::net::TcpStream;
 pub struct Packet {
     pub padding_length: u8,
     pub version: u8,
-    pub opcode: Codes,
+    pub code: Codes,
     pub chan_id: u32,
     pub nonce: [u8; 12],
     pub ciphertext: Vec<u8>,
@@ -24,7 +24,7 @@ impl Packet {
     pub fn new(
         padding_length: u8,
         version: u8,
-        opcode: Codes,
+        code: Codes,
         chan_id: u32,
         nonce: [u8; 12],
         ciphertext: Vec<u8>,
@@ -33,7 +33,7 @@ impl Packet {
         Self {
             padding_length,
             version,
-            opcode,
+            code,
             chan_id,
             nonce,
             ciphertext,

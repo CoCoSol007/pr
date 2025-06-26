@@ -12,13 +12,13 @@ pub struct PrOptions {
     help: bool,
 }
 
-pub fn main() -> PrOptions{
+pub fn main() -> PrOptions {
     let opts = PrOptions::parse_args_default_or_exit();
-    
+
     if opts.help {
         println!("{}", PrOptions::usage());
         std::process::exit(1);
     }
-    
+
     opts
 }

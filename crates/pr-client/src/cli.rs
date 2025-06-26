@@ -9,7 +9,7 @@ pub struct PrOptions {
     help: bool,
 }
 
-pub fn main() {
+pub fn _main() {
     let opts = PrOptions::parse_args_default_or_exit();
 
     if opts.help {

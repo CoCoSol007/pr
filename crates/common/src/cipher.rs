@@ -6,12 +6,12 @@ use super::packet::{Packet, serialize_packet};
 use aes_gcm::{
     Aes256Gcm,
     aead::{Aead, Nonce as AeadNonce},
-};use rand::rngs::OsRng;
+};
 use rand::Rng;
+use rand::rngs::OsRng;
 use std::io;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
-
 
 pub fn encrypt_message(cipher: &Aes256Gcm, message: &str) -> io::Result<(Vec<u8>, [u8; 12])> {
     let mut nonce_bytes = [0u8; 12];
@@ -56,15 +56,7 @@ pub async fn send_encrypted_packet(
 ) -> io::Result<()> {
     let (ciphertext, nonce) = encrypt_message(cipher, message)?;
 
-    let packet = Packet::new(
-        0,
-        1,
-        code,
-        chan_id,
-        nonce,
-        ciphertext,
-        vec![],
-    );
+    let packet = Packet::new(0, 1, code, chan_id, nonce, ciphertext, vec![]);
 
     let serialized_packet = serialize_packet(&packet)?;
     let packet_len = serialized_packet.len() as u32;
