@@ -5,9 +5,9 @@ pub mod cli;
 
 use aes_gcm::{Aes256Gcm, KeyInit};
 use common::{
-    cipher::decrypt_message,
+    cipher::{decrypt_message, send_encrypted_packet},
     codes::Codes,
-    packet::{Packet, deserialize_packet, get_packet_length, serialize_packet},
+    packet::{Packet, serialize_packet, read_next_packet},
 };
 use nix::fcntl::{FcntlArg, OFlag, fcntl};
 use nix::pty::{
@@ -18,7 +18,7 @@ use nix::unistd::{execvp, read, write};
 use rand::rngs::OsRng;
 use sha2::{Digest, Sha256};
 use std::ffi::CString;
-use std::io::{self, Write};
+use std::io;
 use std::os::fd::OwnedFd;
 use std::sync::mpsc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -34,6 +34,7 @@ struct SecureConnection {
     pub pty_fd: Option<OwnedFd>,
     pub child_fd: Option<nix::unistd::Pid>,
     pub command_sender: Option<mpsc::Sender<String>>,
+    pub output_receiver: Option<mpsc::Receiver<String>>,
 }
 
 #[tokio::main]
@@ -92,9 +93,9 @@ async fn handle_secure_communication(mut conn: SecureConnection) -> io::Result<(
     conn.child_fd = Some(child_pid);
     conn.command_sender = Some(cmd_tx);
 
-    start_pty_handler(pty_master, cmd_rx);
+    start_pty_handler(&mut conn, pty_master, cmd_rx);
 
-    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+    tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
 
     process_client_commands(&mut conn).await?;
 
@@ -105,39 +106,106 @@ async fn handle_secure_communication(mut conn: SecureConnection) -> io::Result<(
     Ok(())
 }
 
-fn start_pty_handler(pty_master: OwnedFd, cmd_rx: mpsc::Receiver<String>) {
+fn start_pty_handler(
+    conn: &mut SecureConnection,
+    pty_master: OwnedFd,
+    cmd_rx: mpsc::Receiver<String>,
+) {
     // Allow non-blocking reads the master PTY
     let current_flags = fcntl(&pty_master, FcntlArg::F_GETFL).expect("Failed to get fd flags");
     let new_flags = OFlag::from_bits_truncate(current_flags) | OFlag::O_NONBLOCK;
     fcntl(&pty_master, FcntlArg::F_SETFL(new_flags)).expect("Failed to set fd flags");
 
+    let (output_tx, output_rx) = mpsc::channel::<String>();
+
+    conn.output_receiver = Some(output_rx);
+
     task::spawn_blocking(move || {
-        let mut buffer = [0u8; 1024];
+        let mut buffer = [0u8; 4096];
+
+        write(&pty_master, "clear\n".as_bytes()).expect("Failed to clear PTY");
+
+        std::thread::sleep(std::time::Duration::from_millis(200));
+
+        // Read essentially the prompt as we just cleared the PTY
+        let mut initial_output = String::new();
+        loop {
+            match read(&pty_master, &mut buffer) {
+                Ok(n) if n > 0 => {
+                    let output = String::from_utf8_lossy(&buffer[0..n]).to_string();
+                    initial_output.push_str(&output);
+                }
+                Err(e) if e == nix::errno::Errno::EAGAIN || e == nix::errno::Errno::EWOULDBLOCK => {
+                    break;
+                }
+                _ => break,
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+
+        if !initial_output.is_empty() {
+            output_tx.send(initial_output).ok();
+        }
 
         loop {
             if let Ok(cmd) = cmd_rx.try_recv() {
-                if let Ok(n) = read(&pty_master, &mut buffer) {
-                    print!("{}", String::from_utf8_lossy(&buffer[0..n]));
+                if let Err(e) = write(&pty_master, format!("{}\n", cmd).as_bytes()) {
+                    eprintln!("Failed to write command: {}", e);
+                    continue;
                 }
 
-                if let Err(e) = write(&pty_master, format!("{}\r\n", cmd).as_bytes()) {
-                    eprintln!("Failed to write command to PTY: {}", e);
-                }
+                std::thread::sleep(std::time::Duration::from_millis(100));
 
-                std::thread::sleep(std::time::Duration::from_millis(200));
+                let mut total_output = String::new();
+                let mut counter = 0;
 
-                match read(&pty_master, &mut buffer) {
-                    Ok(n) if n > 0 => {
-                        print!("{}", String::from_utf8_lossy(&buffer[0..n]));
-                        io::stdout().flush().unwrap();
+                // Read the output of the command
+                while counter < 10 {
+                    // Read until we get no data for 10 (arbitrary) times
+                    match read(&pty_master, &mut buffer) {
+                        Ok(n) if n > 0 => {
+                            let output = String::from_utf8_lossy(&buffer[0..n]).to_string();
+                            total_output.push_str(&output);
+                            counter = 0;
+                        }
+                        Err(e)
+                            if e == nix::errno::Errno::EAGAIN
+                                || e == nix::errno::Errno::EWOULDBLOCK =>
+                        {
+                            counter += 1;
+                        }
+                        Err(e) => {
+                            if e == nix::errno::Errno::EBADF {
+                                return;
+                            }
+                            break;
+                        }
+                        _ => break,
                     }
-                    Err(e) => {
-                        eprintln!("Error reading from PTY: {}", e);
-                        break;
-                    }
-                    _ => {}
+                    std::thread::sleep(std::time::Duration::from_millis(20));
                 }
+
+                let lines: Vec<&str> = total_output.lines().collect();
+                let mut clean_output = String::new();
+                let mut skip_command = false;
+
+                for line in lines {
+                    // avoid sending the command itself in the output
+                    if !skip_command && line.trim() == cmd.trim() {
+                        print!("{}\n", line);
+                        skip_command = true;
+                        continue;
+                    }
+                    clean_output.push_str(line);
+                    clean_output.push('\n');
+                }
+                clean_output.pop(); // to get the cursor after the prompt
+
+                print!("{}", clean_output.clone());
+
+                output_tx.send(clean_output).ok();
             }
+
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
     });
@@ -147,32 +215,51 @@ async fn process_client_commands(conn: &mut SecureConnection) -> io::Result<()> 
     let stream = &mut conn.stream;
 
     loop {
-        let packet_len = get_packet_length(stream).await?;
-        let mut packet_data = vec![0u8; packet_len];
-        stream.read_exact(&mut packet_data).await?;
-
-        let packet = deserialize_packet(&packet_data)?;
-
-        match packet.code {
-            Codes::DISCONNECT => {
-                println!("Client requested disconnect");
-                return Ok(());
+        // Check if the output of some previously executed command is available
+        if let Some(receiver) = &mut conn.output_receiver {
+            if let Ok(output) = receiver.try_recv() {
+                // Send the output back to the client
+                send_encrypted_packet(stream, &conn.cipher, Codes::COMMAND_RESPONSE, &output)
+                    .await?;
             }
-            Codes::COMMAND => {
-                if let Some(message) =
-                    decrypt_message(&conn.cipher, &packet.nonce, &packet.ciphertext)
-                {
+        }
+
+        let packet_result = tokio::select! {
+            packet = read_next_packet(stream) => packet,
+            _ = tokio::time::sleep(tokio::time::Duration::from_millis(5)) => continue,
+        };
+
+        match packet_result {
+            Ok(packet) => match packet.code {
+                Codes::DISCONNECT => {
+                    println!("Client requested disconnect");
+                    return Ok(());
+                }
+                Codes::REFRESH_SESSION => {
+                    if let Some(receiver) = &mut conn.output_receiver {
+                        while receiver.try_recv().is_ok() {} // Clear the output receiver
+                    }
+
                     if let Some(tx) = &conn.command_sender {
-                        if let Err(e) = tx.send(message) {
-                            eprintln!("Failed to forward command to PTY: {}", e);
-                        }
-                    } else {
-                        eprintln!("Command channel not initialized");
+                        let _ = tx.send("".to_string());
                     }
                 }
-            }
-            _ => {
-                println!("Received packet with unexpected code : {:?}", packet.code);
+                Codes::COMMAND => {
+                    if let Some(cmd) =
+                        decrypt_message(&conn.cipher, &packet.nonce, &packet.ciphertext)
+                    {
+                        if let Some(tx) = &conn.command_sender {
+                            // Send the command the PTY handler
+                            let _ = tx.send(cmd);
+                        }
+                    }
+                }
+                _ => {}
+            },
+            Err(e) => {
+                if e.kind() != io::ErrorKind::WouldBlock && e.kind() != io::ErrorKind::TimedOut {
+                    return Err(e);
+                }
             }
         }
     }
@@ -181,11 +268,7 @@ async fn process_client_commands(conn: &mut SecureConnection) -> io::Result<()> 
 async fn setup_secure_connection(mut stream: TcpStream) -> io::Result<SecureConnection> {
     let stream_ref = &mut stream;
 
-    let packet_len = get_packet_length(stream_ref).await?;
-    let mut packet_data = vec![0u8; packet_len];
-    stream_ref.read_exact(&mut packet_data).await?;
-
-    let client_packet = deserialize_packet(&packet_data)?;
+    let client_packet = read_next_packet(stream_ref).await?;
 
     if client_packet.code != Codes::PUBLIC_KEY_REQUEST {
         return Err(io::Error::new(
@@ -212,7 +295,6 @@ async fn setup_secure_connection(mut stream: TcpStream) -> io::Result<SecureConn
         0,
         1,
         Codes::PUBLIC_KEY_RESPONSE,
-        0,
         [0; 12],
         server_pub_key.as_bytes().to_vec(),
         vec![],
@@ -225,7 +307,7 @@ async fn setup_secure_connection(mut stream: TcpStream) -> io::Result<SecureConn
 
     let shared_secret = server_priv_key.diffie_hellman(&client_pub_key);
 
-    let mut hasher = Sha256::new();
+    let mut hasher = Sha256::default();
     hasher.update(shared_secret.as_bytes());
     let encryption_key = hasher.finalize();
 
@@ -240,6 +322,7 @@ async fn setup_secure_connection(mut stream: TcpStream) -> io::Result<SecureConn
         pty_fd: None,
         child_fd: None,
         command_sender: None,
+        output_receiver: None,
     };
 
     println!("Secure connection established with client");

@@ -5,15 +5,15 @@ mod cli;
 mod stream;
 
 use aes_gcm::{Aes256Gcm, KeyInit};
-use common::cipher::send_encrypted_packet;
+use common::cipher::{decrypt_message, send_encrypted_packet};
 use common::codes::Codes;
-use common::packet::{Packet, deserialize_packet, get_packet_length, serialize_packet};
+use common::packet::{Packet, serialize_packet, read_next_packet};
 use common::rw::get_input;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
-use std::io;
+use std::io::{self, Write};
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
+    io::AsyncWriteExt,
     net::TcpStream,
 };
 use x25519_dalek::{EphemeralSecret, PublicKey};
@@ -75,8 +75,8 @@ async fn main() {
                     let name = get_input("Switch to connection: ");
                     if let Some(stream) = connections.get_mut(&name) {
                         // TODO: Add the ability to choose the channel ID
-                        let chan_id = 0;
-                        if let Err(e) = communication(stream, chan_id).await {
+                        // let chan_id = 0;
+                        if let Err(e) = communication(stream).await {
                             println!("Failed to communicate on {}: {}", name, e);
                         }
                     } else {
@@ -131,16 +131,13 @@ async fn connexion(
 
             connections.insert(name.trim().to_string(), secure_stream);
 
-            // TODO: If a connection is already established with the same name, increment the channel ID by one (we thus create a new shell on the remote machine)
-            let chan_id = 0;
+            println!("Connected to server at {}:{}", address, port);
 
             // authentification().await?;
 
             if let Some(stream_ref) = connections.get_mut(&name.trim().to_string()) {
-                communication(stream_ref, chan_id).await?;
+                communication(stream_ref).await?;
             }
-
-            println!("Connected to server at {}:{}", address, port);
         }
         Err(e) => {
             println!("Failed to connect to server: {}", e);
@@ -161,7 +158,6 @@ async fn setup_secure_connection(mut stream: TcpStream) -> io::Result<stream::St
         0,
         1,
         Codes::PUBLIC_KEY_REQUEST,
-        0,
         [0; 12],
         pub_key.as_bytes().to_vec(),
         vec![],
@@ -176,12 +172,7 @@ async fn setup_secure_connection(mut stream: TcpStream) -> io::Result<stream::St
     stream_ref.write_all(&serialized_packet).await?;
 
     // We get the length of the response packet
-    let response_len = get_packet_length(stream_ref).await?;
-
-    let mut response_buf = vec![0u8; response_len];
-    stream_ref.read_exact(&mut response_buf).await?;
-
-    let response_packet = deserialize_packet(&response_buf)?;
+    let response_packet = read_next_packet(stream_ref).await?;
 
     if response_packet.code != Codes::PUBLIC_KEY_RESPONSE {
         return Err(io::Error::new(
@@ -204,7 +195,7 @@ async fn setup_secure_connection(mut stream: TcpStream) -> io::Result<stream::St
 
     let shared_secret = ephemeral_secret.diffie_hellman(&server_pub_key);
 
-    let mut hasher = Sha256::new();
+    let mut hasher = Sha256::default();
     hasher.update(shared_secret.as_bytes());
     let encryption_key = hasher.finalize();
 
@@ -234,22 +225,52 @@ async fn authentification() -> io::Result<()> {
     todo!();
 }
 
-async fn communication(stream: &mut stream::Stream, chan_id: u32) -> io::Result<()> {
+async fn communication(stream: &mut stream::Stream) -> io::Result<()> {
+    match read_next_packet(&mut stream.stream).await {
+        Ok(packet) => {
+            if packet.code == Codes::COMMAND_RESPONSE {
+                if let Some(message) =
+                    decrypt_message(&stream.cipher, &packet.nonce, &packet.ciphertext)
+                {
+                    print!("{}", message);
+                    std::io::stdout().flush().unwrap();
+                }
+            }
+        }
+        Err(_) => {}
+    }
+
     loop {
-        let message = get_input("Enter a message: ");
-        if message.is_empty() {
-            break Ok(());
-        } else if let Err(e) = send_encrypted_packet(
-            &mut stream.stream,
-            &stream.cipher,
-            Codes::COMMAND,
-            chan_id,
-            &message,
-        )
-        .await
-        {
-            println!("Failed to send message: {}. Try again.", e);
+        let command = get_input("").trim().to_string();
+
+        if command.is_empty() {
             continue;
         }
+
+        if command == "%" { // Exit command
+            send_encrypted_packet(&mut stream.stream, &stream.cipher, Codes::REFRESH_SESSION, "").await?;
+            break;
+        }
+
+        send_encrypted_packet(&mut stream.stream, &stream.cipher, Codes::COMMAND, &command).await?;
+
+        match read_next_packet(&mut stream.stream).await {
+            Ok(packet) => {
+                if packet.code == Codes::COMMAND_RESPONSE {
+                    if let Some(message) =
+                        decrypt_message(&stream.cipher, &packet.nonce, &packet.ciphertext)
+                    {
+                        print!("{}", message);
+                        std::io::stdout().flush().unwrap();
+                    }
+                }
+            }
+            Err(e) => {
+                println!("Error: {}", e);
+                break;
+            }
+        }
     }
+
+    Ok(())
 }

@@ -51,12 +51,12 @@ pub async fn send_encrypted_packet(
     stream: &mut TcpStream,
     cipher: &Aes256Gcm,
     code: Codes,
-    chan_id: u32,
+    // chan_id: u32,
     message: &str,
 ) -> io::Result<()> {
     let (ciphertext, nonce) = encrypt_message(cipher, message)?;
 
-    let packet = Packet::new(0, 1, code, chan_id, nonce, ciphertext, vec![]);
+    let packet = Packet::new(0, 1, code, /* chan_id */ nonce, ciphertext, vec![]);
 
     let serialized_packet = serialize_packet(&packet)?;
     let packet_len = serialized_packet.len() as u32;

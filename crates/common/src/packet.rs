@@ -14,7 +14,7 @@ pub struct Packet {
     pub padding_length: u8,
     pub version: u8,
     pub code: Codes,
-    pub chan_id: u32,
+    // pub chan_id: u32,
     pub nonce: [u8; 12],
     pub ciphertext: Vec<u8>,
     pub padding: Vec<u8>,
@@ -25,7 +25,7 @@ impl Packet {
         padding_length: u8,
         version: u8,
         code: Codes,
-        chan_id: u32,
+        // chan_id: u32,
         nonce: [u8; 12],
         ciphertext: Vec<u8>,
         padding: Vec<u8>,
@@ -34,12 +34,19 @@ impl Packet {
             padding_length,
             version,
             code,
-            chan_id,
+            // chan_id,
             nonce,
             ciphertext,
             padding,
         }
     }
+}
+
+pub async fn read_next_packet(stream: &mut TcpStream) -> io::Result<Packet> {
+    let packet_len = get_packet_length(stream).await?;
+    let mut packet_data = vec![0u8; packet_len];
+    stream.read_exact(&mut packet_data).await?;
+    deserialize_packet(&packet_data)
 }
 
 pub async fn get_packet_length(stream: &mut TcpStream) -> Result<usize, std::io::Error> {
