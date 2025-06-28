@@ -226,18 +226,13 @@ async fn authentification() -> io::Result<()> {
 }
 
 async fn communication(stream: &mut stream::Stream) -> io::Result<()> {
-    match read_next_packet(&mut stream.stream).await {
-        Ok(packet) => {
-            if packet.code == Codes::COMMAND_RESPONSE {
-                if let Some(message) =
-                    decrypt_message(&stream.cipher, &packet.nonce, &packet.ciphertext)
-                {
-                    print!("{}", message);
-                    std::io::stdout().flush().unwrap();
-                }
+    if let Ok(packet) = read_next_packet(&mut stream.stream).await {
+        if packet.code == Codes::COMMAND_RESPONSE {
+            if let Some(message) = decrypt_message(&stream.cipher, &packet.nonce, &packet.ciphertext) {
+                print!("{}", message);
+                std::io::stdout().flush().unwrap();
             }
         }
-        Err(_) => {}
     }
 
     loop {
@@ -254,22 +249,15 @@ async fn communication(stream: &mut stream::Stream) -> io::Result<()> {
 
         send_encrypted_packet(&mut stream.stream, &stream.cipher, Codes::COMMAND, &command).await?;
 
-        match read_next_packet(&mut stream.stream).await {
-            Ok(packet) => {
-                if packet.code == Codes::COMMAND_RESPONSE {
-                    if let Some(message) =
-                        decrypt_message(&stream.cipher, &packet.nonce, &packet.ciphertext)
-                    {
-                        print!("{}", message);
-                        std::io::stdout().flush().unwrap();
-                    }
+        if let Ok(packet) = read_next_packet(&mut stream.stream).await {
+            if packet.code == Codes::COMMAND_RESPONSE {
+                if let Some(message) = decrypt_message(&stream.cipher, &packet.nonce, &packet.ciphertext) {
+                    print!("{}", message);
+                    std::io::stdout().flush().unwrap();
                 }
             }
-            Err(e) => {
-                println!("Error: {}", e);
-                break;
-            }
         }
+        std::thread::sleep(std::time::Duration::from_millis(50));
     }
 
     Ok(())

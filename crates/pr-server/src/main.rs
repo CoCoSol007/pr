@@ -21,7 +21,7 @@ use std::ffi::CString;
 use std::io;
 use std::os::fd::OwnedFd;
 use std::sync::mpsc;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::task;
 use x25519_dalek::{EphemeralSecret, PublicKey};
@@ -120,16 +120,16 @@ fn start_pty_handler(
 
     conn.output_receiver = Some(output_rx);
 
+    let mut buffer = [0u8; 4096];
+    let mut initial_output = String::new();
+
+    write(&pty_master, "clear\n".as_bytes()).expect("Failed to clear PTY");
+
+    std::thread::sleep(std::time::Duration::from_millis(200));
+
     task::spawn_blocking(move || {
-        let mut buffer = [0u8; 4096];
-
-        write(&pty_master, "clear\n".as_bytes()).expect("Failed to clear PTY");
-
-        std::thread::sleep(std::time::Duration::from_millis(200));
-
-        // Read essentially the prompt as we just cleared the PTY
-        let mut initial_output = String::new();
         loop {
+            // Read essentially the prompt as we just cleared the PTY
             match read(&pty_master, &mut buffer) {
                 Ok(n) if n > 0 => {
                     let output = String::from_utf8_lossy(&buffer[0..n]).to_string();
@@ -161,7 +161,7 @@ fn start_pty_handler(
 
                 // Read the output of the command
                 while counter < 10 {
-                    // Read until we get no data for 10 (arbitrary) times
+                    // Read until we get no data for 10 times (arbitrary)
                     match read(&pty_master, &mut buffer) {
                         Ok(n) if n > 0 => {
                             let output = String::from_utf8_lossy(&buffer[0..n]).to_string();
@@ -217,7 +217,7 @@ async fn process_client_commands(conn: &mut SecureConnection) -> io::Result<()> 
     loop {
         // Check if the output of some previously executed command is available
         if let Some(receiver) = &mut conn.output_receiver {
-            if let Ok(output) = receiver.try_recv() {
+            while let Ok(output) = receiver.try_recv() {
                 // Send the output back to the client
                 send_encrypted_packet(stream, &conn.cipher, Codes::COMMAND_RESPONSE, &output)
                     .await?;
