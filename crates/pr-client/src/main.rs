@@ -2,150 +2,83 @@
 // SPDX-License-Identifier: MPL-2.0
 
 mod cli;
+mod cmdpr;
 mod stream;
 
 use aes_gcm::{Aes256Gcm, KeyInit};
 use common::cipher::{decrypt_message, send_encrypted_packet};
 use common::codes::Codes;
-use common::packet::{Packet, serialize_packet, read_next_packet};
+use common::packet::{Packet, read_next_packet, serialize_packet};
 use common::rw::get_input;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::io::{self, Write};
-use tokio::{
-    io::AsyncWriteExt,
-    net::TcpStream,
-};
+use tokio::{io::AsyncWriteExt, net::TcpStream};
 use x25519_dalek::{EphemeralSecret, PublicKey};
-
-fn print_options() {
-    println!("\nOptions:");
-    println!("1 - Add connection to a server");
-    println!("2 - Disconnect from a server");
-    println!("3 - Switch to a different connexion");
-    println!("4 - List all connections");
-}
 
 #[tokio::main]
 async fn main() {
     let mut connections: HashMap<String, stream::Stream> = HashMap::new();
 
+    cmdpr::clear_screen();
+
     loop {
-        print_options();
-
-        if let Ok(choice) = get_input("> ").trim().parse::<u8>() {
-            match choice {
-                1 => {
-                    let address = get_input("Enter the server address: ");
-                    if address.is_empty() {
-                        println!("No address provided.");
-                        continue;
-                    }
-                    let address = address.trim();
-
-                    let port = get_input("Enter the port to listen on (default 1736) : ");
-                    let port = port.trim().parse::<u16>().unwrap_or(1736);
-
-                    connexion(&mut connections, address.to_string(), port.to_string())
-                        .await
-                        .unwrap_or_else(|e| {
-                            println!("Error connecting: {}", e);
-                        });
-                }
-                2 => {
-                    if connections.is_empty() {
-                        println!("No connections available to disconnect from.");
-
-                        let name = get_input("Enter the name of the connection to disconnect: ");
-                        if let Some(mut stream) = connections.remove(&name) {
-                            if let Err(e) = stream.stream.shutdown().await {
-                                println!("Failed to disconnect from {} : {}", name, e);
-                            } else {
-                                println!("Disconnected from {}", name);
-                            }
-                        }
+        match cmdpr::prompt(&connections) {
+            Ok(action) => match action {
+                cmdpr::Actions::AddConnection {
+                    name,
+                    address,
+                    port,
+                } => {
+                    if let Err(_) = add_connection(&mut connections, name, address, port).await {
+                        cmdpr::show_message_and_wait("Connection failed");
                     }
                 }
-                3 => {
-                    if connections.is_empty() {
-                        println!("No connections available to switch to.");
-                        continue;
-                    }
-
-                    let name = get_input("Switch to connection: ");
+                cmdpr::Actions::ListConnections => cmdpr::print_connections(&connections),
+                cmdpr::Actions::RemoveConnection(name) => {
+                    remove_connection(&mut connections, name).await
+                }
+                cmdpr::Actions::SwitchConnection(name) => {
                     if let Some(stream) = connections.get_mut(&name) {
-                        // TODO: Add the ability to choose the channel ID
-                        // let chan_id = 0;
-                        if let Err(e) = communication(stream).await {
-                            println!("Failed to communicate on {}: {}", name, e);
-                        }
-                    } else {
-                        println!("No connection found with the name '{}'.", name);
+                        if let Err(_) = communication(stream).await {}
                     }
                 }
-                4 => {
-                    if connections.is_empty() {
-                        println!("No connections available.");
-                    } else {
-                        for (name, stream) in &connections {
-                            println!(
-                                "- {} : {}",
-                                name,
-                                stream
-                                    .stream
-                                    .peer_addr()
-                                    .expect("Failed to get peer address")
-                            );
-                        }
-                    }
+                cmdpr::Actions::Quit => {
+                    break;
                 }
-                _ => {
-                    println!("Invalid option, please choose a number between 1 and 4.");
-                    continue;
-                }
+            },
+            Err(_) => {
+                continue;
             }
-        } else {
-            println!("Invalid input, please enter a number between 1 and 4.");
-            continue;
         }
     }
 }
 
-async fn connexion(
+async fn add_connection(
     connections: &mut HashMap<String, stream::Stream>,
+    name: String,
     address: String,
-    port: String,
+    port: u16,
 ) -> io::Result<()> {
     match TcpStream::connect(format!("{}:{}", address, port)).await {
         Ok(stream) => {
-            let name = loop {
-                let input = get_input("Enter a name for this connection : ");
-                if input.is_empty() {
-                    println!("Name cannot be empty. Please enter a valid name.");
-                    continue;
-                }
-                break input;
-            };
-
             let secure_stream = setup_secure_connection(stream).await?;
-
-            connections.insert(name.trim().to_string(), secure_stream);
-
-            println!("Connected to server at {}:{}", address, port);
-
-            // authentification().await?;
-
-            if let Some(stream_ref) = connections.get_mut(&name.trim().to_string()) {
-                communication(stream_ref).await?;
-            }
+            connections.insert(name, secure_stream);
         }
-        Err(e) => {
-            println!("Failed to connect to server: {}", e);
-            return Err(e);
+        Err(_) => {
+            return Err(io::Error::new(
+                io::ErrorKind::ConnectionRefused,
+                "Connection failed",
+            ));
         }
     }
-
     Ok(())
+}
+
+async fn remove_connection(connections: &mut HashMap<String, stream::Stream>, name: String) {
+    if let Some(mut stream) = connections.remove(&name) {
+        let _ = stream.stream.shutdown().await;
+    }
 }
 
 async fn setup_secure_connection(mut stream: TcpStream) -> io::Result<stream::Stream> {
@@ -157,7 +90,7 @@ async fn setup_secure_connection(mut stream: TcpStream) -> io::Result<stream::St
     let packet = Packet::new(
         0,
         1,
-        Codes::PUBLIC_KEY_REQUEST,
+        Codes::PublicKeyRequest,
         [0; 12],
         pub_key.as_bytes().to_vec(),
         vec![],
@@ -174,7 +107,7 @@ async fn setup_secure_connection(mut stream: TcpStream) -> io::Result<stream::St
     // We get the length of the response packet
     let response_packet = read_next_packet(stream_ref).await?;
 
-    if response_packet.code != Codes::PUBLIC_KEY_RESPONSE {
+    if response_packet.code != Codes::PublicKeyResponse {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             "Unexpected code in response",
@@ -202,36 +135,37 @@ async fn setup_secure_connection(mut stream: TcpStream) -> io::Result<stream::St
     let cipher = Aes256Gcm::new_from_slice(&encryption_key)
         .map_err(|_| io::Error::new(io::ErrorKind::Other, "Failed to initialize cipher"))?;
 
-    let persistent_secret = EphemeralSecret::random_from_rng(rand::rngs::OsRng);
-    let persistent_public = PublicKey::from(&persistent_secret);
-
-    let secure_stream = stream::Stream {
-        stream,
-        priv_key: persistent_secret,
-        pub_key: persistent_public,
-        rem_pub_key: server_pub_key,
-        cipher,
-    };
-
-    println!(
-        "Secure connection established with server at {}",
-        secure_stream.stream.peer_addr()?
-    );
+    let secure_stream = stream::Stream { stream, cipher };
 
     Ok(secure_stream)
 }
 
-async fn authentification() -> io::Result<()> {
-    todo!();
-}
-
 async fn communication(stream: &mut stream::Stream) -> io::Result<()> {
-    if let Ok(packet) = read_next_packet(&mut stream.stream).await {
-        if packet.code == Codes::COMMAND_RESPONSE {
-            if let Some(message) = decrypt_message(&stream.cipher, &packet.nonce, &packet.ciphertext) {
-                print!("{}", message);
-                std::io::stdout().flush().unwrap();
-            }
+    send_encrypted_packet(
+        &mut stream.stream,
+        &stream.cipher,
+        Codes::RefreshSession,
+        "",
+    )
+    .await?;
+
+    loop {
+        match read_next_packet(&mut stream.stream).await {
+            Ok(packet) => match packet.code {
+                Codes::CommandOutput => {
+                    if let Some(message) =
+                        decrypt_message(&stream.cipher, &packet.nonce, &packet.ciphertext)
+                    {
+                        print!("{}", message);
+                        std::io::stdout().flush().unwrap();
+                    }
+                }
+                Codes::CommandEnd => {
+                    break;
+                }
+                _ => {}
+            },
+            Err(_) => break,
         }
     }
 
@@ -242,22 +176,39 @@ async fn communication(stream: &mut stream::Stream) -> io::Result<()> {
             continue;
         }
 
-        if command == "%" { // Exit command
-            send_encrypted_packet(&mut stream.stream, &stream.cipher, Codes::REFRESH_SESSION, "").await?;
+        if command == "%" {
+            // Exit command
             break;
         }
 
-        send_encrypted_packet(&mut stream.stream, &stream.cipher, Codes::COMMAND, &command).await?;
+        send_encrypted_packet(&mut stream.stream, &stream.cipher, Codes::Command, &command).await?;
 
-        if let Ok(packet) = read_next_packet(&mut stream.stream).await {
-            if packet.code == Codes::COMMAND_RESPONSE {
-                if let Some(message) = decrypt_message(&stream.cipher, &packet.nonce, &packet.ciphertext) {
-                    print!("{}", message);
-                    std::io::stdout().flush().unwrap();
+        loop {
+            let packet_result = tokio::select! {
+                _ = tokio::time::sleep(tokio::time::Duration::from_millis(50)) => continue,
+                packet = read_next_packet(&mut stream.stream) => packet
+            };
+
+            match packet_result {
+                Ok(packet) => match packet.code {
+                    Codes::CommandOutput => {
+                        if let Some(message) =
+                            decrypt_message(&stream.cipher, &packet.nonce, &packet.ciphertext)
+                        {
+                            print!("{}", message);
+                            std::io::stdout().flush().unwrap();
+                        }
+                    }
+                    Codes::CommandEnd => {
+                        break;
+                    }
+                    _ => {}
+                },
+                Err(_) => {
+                    break;
                 }
             }
         }
-        std::thread::sleep(std::time::Duration::from_millis(50));
     }
 
     Ok(())

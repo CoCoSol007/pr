@@ -7,7 +7,7 @@ use aes_gcm::{Aes256Gcm, KeyInit};
 use common::{
     cipher::{decrypt_message, send_encrypted_packet},
     codes::Codes,
-    packet::{Packet, serialize_packet, read_next_packet},
+    packet::{Packet, read_next_packet, serialize_packet},
 };
 use nix::fcntl::{FcntlArg, OFlag, fcntl};
 use nix::pty::{
@@ -28,8 +28,6 @@ use x25519_dalek::{EphemeralSecret, PublicKey};
 
 struct SecureConnection {
     pub stream: TcpStream,
-    pub pub_key: PublicKey,
-    pub client_pub_key: PublicKey,
     pub cipher: Aes256Gcm,
     pub pty_fd: Option<OwnedFd>,
     pub child_fd: Option<nix::unistd::Pid>,
@@ -123,6 +121,7 @@ fn start_pty_handler(
     let mut buffer = [0u8; 4096];
     let mut initial_output = String::new();
 
+    // Clear the PTY
     write(&pty_master, "clear\n".as_bytes()).expect("Failed to clear PTY");
 
     std::thread::sleep(std::time::Duration::from_millis(200));
@@ -148,64 +147,80 @@ fn start_pty_handler(
         }
 
         loop {
+            // Check if there is a command to execute
             if let Ok(cmd) = cmd_rx.try_recv() {
+                if cmd.trim().is_empty() {
+                    // used to refresh the session
+                    let mut counter = 0;
+                    while counter < 10 {
+                        match read(&pty_master, &mut buffer) {
+                            Ok(n) if n > 0 => counter = 0,
+                            _ => counter += 1,
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(2));
+                    }
+
+                    output_tx.send("__COMMAND_END__".to_string()).ok();
+                    continue;
+                }
+
+                // We execute the command on the PTY
                 if let Err(e) = write(&pty_master, format!("{}\n", cmd).as_bytes()) {
                     eprintln!("Failed to write command: {}", e);
                     continue;
                 }
 
-                std::thread::sleep(std::time::Duration::from_millis(100));
-
-                let mut total_output = String::new();
                 let mut counter = 0;
+                let mut skipped = false;
 
                 // Read the output of the command
-                while counter < 10 {
-                    // Read until we get no data for 10 times (arbitrary)
+                while counter < 50 {
                     match read(&pty_master, &mut buffer) {
                         Ok(n) if n > 0 => {
                             let output = String::from_utf8_lossy(&buffer[0..n]).to_string();
-                            total_output.push_str(&output);
+
+                            // The first output with at the beginning the command itself
+                            if !skipped {
+                                if let Some(pos) = output.find('\n') {
+                                    // We remove the command line and send everything that follows
+                                    let filtered = &output[pos + 1..];
+                                    if !filtered.is_empty() {
+                                        output_tx.send(filtered.to_string()).ok();
+                                    }
+                                    skipped = true;
+                                }
+                            } else {
+                                // After skipping the command line, we send everything directly
+                                if !output.is_empty() {
+                                    output_tx.send(output).ok();
+                                }
+                            }
                             counter = 0;
                         }
+                        // Non-blocking error
                         Err(e)
                             if e == nix::errno::Errno::EAGAIN
                                 || e == nix::errno::Errno::EWOULDBLOCK =>
                         {
                             counter += 1;
                         }
+                        // Unrecoverable error
                         Err(e) => {
                             if e == nix::errno::Errno::EBADF {
                                 return;
                             }
                             break;
                         }
-                        _ => break,
+                        _ => {
+                            counter += 1;
+                        }
                     }
                     std::thread::sleep(std::time::Duration::from_millis(20));
                 }
 
-                let lines: Vec<&str> = total_output.lines().collect();
-                let mut clean_output = String::new();
-                let mut skip_command = false;
-
-                for line in lines {
-                    // avoid sending the command itself in the output
-                    if !skip_command && line.trim() == cmd.trim() {
-                        print!("{}\n", line);
-                        skip_command = true;
-                        continue;
-                    }
-                    clean_output.push_str(line);
-                    clean_output.push('\n');
-                }
-                clean_output.pop(); // to get the cursor after the prompt
-
-                print!("{}", clean_output.clone());
-
-                output_tx.send(clean_output).ok();
+                // If we got here, it means the command has ended
+                output_tx.send("__COMMAND_END__".to_string()).ok();
             }
-
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
     });
@@ -215,15 +230,26 @@ async fn process_client_commands(conn: &mut SecureConnection) -> io::Result<()> 
     let stream = &mut conn.stream;
 
     loop {
-        // Check if the output of some previously executed command is available
+        // ------------------------------------
+        // EVENTUALLY READING COMMANDS'S OUTPUT
+
+        // This check shouldn't even be here because it checks whether or not some output is available from previous commands
         if let Some(receiver) = &mut conn.output_receiver {
             while let Ok(output) = receiver.try_recv() {
-                // Send the output back to the client
-                send_encrypted_packet(stream, &conn.cipher, Codes::COMMAND_RESPONSE, &output)
-                    .await?;
+                // Means that the command has ended, so we warn the client
+                if output == "__COMMAND_END__" {
+                    send_encrypted_packet(stream, &conn.cipher, Codes::CommandEnd, "").await?;
+                } else {
+                    send_encrypted_packet(stream, &conn.cipher, Codes::CommandOutput, &output)
+                        .await?;
+                }
             }
         }
 
+        // ----------------------------
+        // WAITING FOR CLIENTS COMMANDS
+
+        // Read packet or timeout after 5ms - whichever comes first
         let packet_result = tokio::select! {
             packet = read_next_packet(stream) => packet,
             _ = tokio::time::sleep(tokio::time::Duration::from_millis(5)) => continue,
@@ -231,20 +257,20 @@ async fn process_client_commands(conn: &mut SecureConnection) -> io::Result<()> 
 
         match packet_result {
             Ok(packet) => match packet.code {
-                Codes::DISCONNECT => {
+                Codes::Disconnect => {
                     println!("Client requested disconnect");
                     return Ok(());
                 }
-                Codes::REFRESH_SESSION => {
+                Codes::RefreshSession => {
                     if let Some(receiver) = &mut conn.output_receiver {
-                        while receiver.try_recv().is_ok() {} // Clear the output receiver
+                        while receiver.try_recv().is_ok() {} // Clear the receiver of any previous output
                     }
 
                     if let Some(tx) = &conn.command_sender {
                         let _ = tx.send("".to_string());
                     }
                 }
-                Codes::COMMAND => {
+                Codes::Command => {
                     if let Some(cmd) =
                         decrypt_message(&conn.cipher, &packet.nonce, &packet.ciphertext)
                     {
@@ -270,7 +296,7 @@ async fn setup_secure_connection(mut stream: TcpStream) -> io::Result<SecureConn
 
     let client_packet = read_next_packet(stream_ref).await?;
 
-    if client_packet.code != Codes::PUBLIC_KEY_REQUEST {
+    if client_packet.code != Codes::PublicKeyRequest {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             "Expected PUBLIC_KEY_REQUEST",
@@ -294,7 +320,7 @@ async fn setup_secure_connection(mut stream: TcpStream) -> io::Result<SecureConn
     let response_packet = Packet::new(
         0,
         1,
-        Codes::PUBLIC_KEY_RESPONSE,
+        Codes::PublicKeyResponse,
         [0; 12],
         server_pub_key.as_bytes().to_vec(),
         vec![],
@@ -316,8 +342,6 @@ async fn setup_secure_connection(mut stream: TcpStream) -> io::Result<SecureConn
 
     let secure_conn = SecureConnection {
         stream,
-        pub_key: server_pub_key,
-        client_pub_key,
         cipher,
         pty_fd: None,
         child_fd: None,

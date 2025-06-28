@@ -7,12 +7,13 @@ use serde::{Deserialize, Serialize};
 #[repr(u8)]
 #[derive(Debug, PartialEq, Encode, Decode, Serialize, Deserialize)]
 pub enum Codes {
-    DISCONNECT,
-    CONNECT,
-    AUTH,
-    PUBLIC_KEY_REQUEST,
-    PUBLIC_KEY_RESPONSE,
-    COMMAND,
-    COMMAND_RESPONSE,
-    REFRESH_SESSION
+    Disconnect,
+    Connect,
+    Auth,
+    PublicKeyRequest,
+    PublicKeyResponse,
+    Command,
+    CommandOutput,
+    CommandEnd,
+    RefreshSession,
 }

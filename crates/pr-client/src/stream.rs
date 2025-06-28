@@ -3,12 +3,8 @@
 
 use aes_gcm::Aes256Gcm;
 use tokio::net::TcpStream;
-use x25519_dalek::{EphemeralSecret, PublicKey};
 
 pub struct Stream {
     pub stream: TcpStream,
-    pub priv_key: EphemeralSecret,
-    pub pub_key: PublicKey,
-    pub rem_pub_key: PublicKey,
     pub cipher: Aes256Gcm,
 }
