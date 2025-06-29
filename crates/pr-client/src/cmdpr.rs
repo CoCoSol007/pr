@@ -11,6 +11,7 @@ use crossterm::{
 use std::collections::HashMap;
 use std::io::{self, Write, stdout};
 
+// List the different actions that can be performed in the client
 pub enum Actions {
     AddConnection {
         name: String,
@@ -23,23 +24,19 @@ pub enum Actions {
     Quit,
 }
 
-fn reset(row: u16) -> io::Result<()> {
-    clear_line(row)?;
-    execute!(stdout(), MoveTo(0, row))?;
-    Ok(())
-}
-
 fn clear_line(row: u16) -> io::Result<()> {
+    // Move to the beginning of the line and clear it
     execute!(stdout(), MoveTo(0, row), Clear(ClearType::CurrentLine))?;
     Ok(())
 }
 
 fn ask(prompt: &str, row: u16) -> io::Result<String> {
-    reset(row)?;
+    clear_line(row)?;
     print!("{}: ", prompt);
     stdout().flush()?;
 
     let mut input = String::new();
+
     enable_raw_mode()?;
 
     loop {
@@ -48,13 +45,13 @@ fn ask(prompt: &str, row: u16) -> io::Result<String> {
                 KeyCode::Enter => break,
                 KeyCode::Esc => {
                     disable_raw_mode()?;
-                    reset(row)?;
+                    clear_line(row)?;
                     return Ok(String::new()); // in the prompt function, an empty string indicates cancellation
                 }
                 KeyCode::Backspace => {
                     if !input.is_empty() {
                         input.pop();
-                        reset(row)?;
+                        clear_line(row)?;
                         print!("{}: {}", prompt, input);
                         stdout().flush()?;
                     }
@@ -69,19 +66,21 @@ fn ask(prompt: &str, row: u16) -> io::Result<String> {
             _ => {}
         }
     }
+
     disable_raw_mode()?;
-    reset(row)?;
+    clear_line(row)?;
     Ok(input)
 }
 
 fn show_menu(row: u16) -> io::Result<()> {
-    reset(row)?;
+    clear_line(row)?;
     print!("[A]dd [L]ist [R]emove [S]witch [Q]uit: ");
     stdout().flush()?;
     Ok(())
 }
 
 pub fn clear_screen() {
+    // Clear the whole terminal screen and move the cursor to the top-left corner
     execute!(
         stdout(),
         crossterm::terminal::Clear(crossterm::terminal::ClearType::All),
@@ -100,8 +99,9 @@ fn press_any_key(row: u16, msg: &str) -> io::Result<()> {
     stdout().flush()?;
 
     enable_raw_mode()?;
-    let _ = read()?;
+    let _ = read()?; // Read any key event
     disable_raw_mode()?;
+
     clear_line(row)?;
     Ok(())
 }

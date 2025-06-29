@@ -15,7 +15,7 @@ use tokio::net::TcpStream;
 
 pub fn encrypt_message(cipher: &Aes256Gcm, message: &str) -> io::Result<(Vec<u8>, [u8; 12])> {
     let mut nonce_bytes = [0u8; 12];
-    OsRng.fill(&mut nonce_bytes);
+    OsRng.fill(&mut nonce_bytes); // Fill the nonce with random bytes
     let nonce = AeadNonce::<Aes256Gcm>::from_slice(&nonce_bytes);
 
     let ciphertext = cipher
@@ -51,17 +51,19 @@ pub async fn send_encrypted_packet(
     stream: &mut TcpStream,
     cipher: &Aes256Gcm,
     code: Codes,
-    // chan_id: u32,
     message: &str,
 ) -> io::Result<()> {
     let (ciphertext, nonce) = encrypt_message(cipher, message)?;
 
-    let packet = Packet::new(/* 0, 1,*/ code, /* chan_id */ nonce, ciphertext /*, vec![] */);
+    let packet = Packet::new(code, nonce, ciphertext);
 
     let serialized_packet = serialize_packet(&packet)?;
     let packet_len = serialized_packet.len() as u32;
 
+    // Send the length of the packet first
     stream.write_all(&packet_len.to_be_bytes()).await?;
+
+    // Then send the serialized packet
     stream.write_all(&serialized_packet).await?;
 
     Ok(())

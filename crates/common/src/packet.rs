@@ -33,10 +33,13 @@ impl Packet {
 pub async fn read_next_packet(stream: &mut TcpStream) -> io::Result<Packet> {
     let packet_len = get_packet_length(stream).await?;
     let mut packet_data = vec![0u8; packet_len];
+
+    // Read the exact number of bytes specified by packet_len
     stream.read_exact(&mut packet_data).await?;
     deserialize_packet(&packet_data)
 }
 
+// Reads the first 4 bytes from the stream to determine the length of the packet
 pub async fn get_packet_length(stream: &mut TcpStream) -> Result<usize, std::io::Error> {
     let mut len_buf = [0u8; 4];
     stream.read_exact(&mut len_buf).await?;
