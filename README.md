@@ -3,7 +3,7 @@
 Polyrhoé (PRH or `pr`), from the Greek πολύς (many) and ῥοή (flow), is a protocol operating over TCP/IP for multiplexing simultaneous shell connections to multiple remote hosts.
 
 ## Roadmap
-Due to complications in a [previous collaborative project](https://github.com/lokasku/misc/tree/main/lys) and the time constraints of my final exams, I had to start a completely new project within a tight timeframe of about ten days. The following roadmap outlines its current structure and objectives.
+Due to complications in a [previous collaborative project](https://github.com/lokasku/misc/tree/main/lys) for YH4F 2025 and the time constraints of my final exams, I had to start a completely new project within a tight timeframe of about ten days. The following roadmap outlines its current structure and objectives.
 
 - [x] Client operational
 - [x] Server operational
@@ -31,13 +31,13 @@ Due to complications in a [previous collaborative project](https://github.com/lo
 - [ ] Command history
 
 ## Dependencies
-You need to have Rust and Cargo installed on your system. If you're using Nix, type
+You need to have `rustc` and `cargo` installed on your system. If you're using Nix, you can directly enter
 ```
 nix develop
 ```
-Else, you can install Rust and Cargo by following the instructions on the [official Rust website](https://www.rust-lang.org/tools/install).
+Else, you can install them by following the instructions on the [official Rust website](https://www.rust-lang.org/tools/install).
 
-Once you have dependencies installed, clone the project
+Once you have dependencies installed, clone the project :
 ```shell
 git clone https://github.com/lokasku/pr.git wherever/you/want
 cd wherever/you/want/pr
