@@ -318,12 +318,10 @@ async fn setup_secure_connection(mut stream: TcpStream) -> io::Result<SecureConn
     let server_pub_key = PublicKey::from(&server_priv_key);
 
     let response_packet = Packet::new(
-        0,
-        1,
+
         Codes::PublicKeyResponse,
         [0; 12],
         server_pub_key.as_bytes().to_vec(),
-        vec![],
     );
 
     let serialized_response = serialize_packet(&response_packet)?;

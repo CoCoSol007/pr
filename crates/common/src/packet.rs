@@ -11,30 +11,21 @@ use tokio::net::TcpStream;
 
 #[derive(Debug, Encode, Decode, Serialize, Deserialize)]
 pub struct Packet {
-    pub padding_length: u8,
-    pub version: u8,
     pub code: Codes,
     pub nonce: [u8; 12],
     pub ciphertext: Vec<u8>,
-    pub padding: Vec<u8>,
 }
 
 impl Packet {
     pub fn new(
-        padding_length: u8,
-        version: u8,
         code: Codes,
         nonce: [u8; 12],
         ciphertext: Vec<u8>,
-        padding: Vec<u8>,
     ) -> Self {
         Self {
-            padding_length,
-            version,
             code,
             nonce,
-            ciphertext,
-            padding,
+            ciphertext
         }
     }
 }

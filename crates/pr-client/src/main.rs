@@ -88,12 +88,9 @@ async fn setup_secure_connection(mut stream: TcpStream) -> io::Result<stream::St
     let pub_key = PublicKey::from(&ephemeral_secret);
 
     let packet = Packet::new(
-        0,
-        1,
         Codes::PublicKeyRequest,
         [0; 12],
         pub_key.as_bytes().to_vec(),
-        vec![],
     );
 
     let serialized_packet = serialize_packet(&packet)?;
