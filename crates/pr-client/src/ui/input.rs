@@ -1,7 +1,6 @@
 // SPDX-FileCopyrightText: 2025 Lukas <lukasku@proton.me>
 // SPDX-License-Identifier: MPL-2.0
 
-use common::packet::Stream;
 use crossterm::{
     event::{Event, KeyCode, read},
     terminal::{disable_raw_mode, enable_raw_mode},

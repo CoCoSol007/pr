@@ -6,6 +6,7 @@ use bincode::{self, config};
 use bincode::{Decode, Encode};
 use iroh::endpoint::{RecvStream, SendStream};
 use serde::{Deserialize, Serialize};
+use tokio::io::AsyncWriteExt;
 use std::io;
 
 pub struct Stream {
@@ -17,16 +18,14 @@ pub struct Stream {
 #[derive(Debug, Encode, Decode, Serialize, Deserialize)]
 pub struct Packet {
     pub code: Codes,
-    pub nonce: [u8; 12],
-    pub ciphertext: Vec<u8>,
+    pub msg: Vec<u8>,
 }
 
 impl Packet {
-    pub fn new(code: Codes, nonce: [u8; 12], ciphertext: Vec<u8>) -> Self {
+    pub fn new(code: Codes, msg: Vec<u8>) -> Self {
         Self {
             code,
-            nonce,
-            ciphertext,
+            msg,
         }
     }
 }
@@ -79,4 +78,26 @@ pub fn deserialize_packet(data: &[u8]) -> Result<Packet, std::io::Error> {
 pub fn serialize_packet(packet: &Packet) -> Result<Vec<u8>, std::io::Error> {
     bincode::encode_to_vec(packet, config::standard())
         .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("Serialization error: {}", e)))
+}
+
+pub async fn send_packet(
+    stream: &mut Stream,
+    code: Codes,
+    msg: &String,
+) -> Result<(), std::io::Error> {
+
+    let packet = Packet::new(code, msg.clone().into_bytes());
+    
+    let serialized_packet = serialize_packet(&packet)?;
+    let packet_len = serialized_packet.len() as u32;
+
+    // Send the length of the packet first
+    stream.send_stream.write_all(&packet_len.to_be_bytes()).await?;
+
+    // Then send the serialized packet
+    stream.send_stream.write_all(&serialized_packet).await?;
+
+    stream.send_stream.flush().await?;
+
+    Ok(())
 }

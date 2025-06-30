@@ -9,5 +9,5 @@ mod menus;
 
 pub use actions::Actions;
 pub use display::{print_connections, show_message_and_wait};
-pub use helpers::{clear_screen, format_tags};
+pub use helpers::clear_screen;
 pub use menus::prompt;

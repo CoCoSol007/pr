@@ -1,13 +1,9 @@
 // SPDX-FileCopyrightText: 2025 Lukas <lukasku@proton.me>
 // SPDX-License-Identifier: MPL-2.0
 
-pub mod cli;
-
-use aes_gcm::{Aes256Gcm, KeyInit};
 use common::{
-    cipher::{decrypt_message, send_encrypted_packet},
     codes::Codes,
-    packet::{Packet, Stream, read_next_packet, serialize_packet},
+    packet::{read_next_packet, send_packet, Stream},
 };
 use iroh::{Endpoint, SecretKey};
 use nix::fcntl::{FcntlArg, OFlag, fcntl};
@@ -16,18 +12,14 @@ use nix::pty::{
     forkpty,
 };
 use nix::unistd::{execvp, read, write};
-use rand::rngs::OsRng;
-use sha2::{Digest, Sha256};
 use std::{env, ffi::CString, fs};
 use std::io;
 use std::os::fd::OwnedFd;
 use std::sync::mpsc;
 use tokio::task;
-use x25519_dalek::{EphemeralSecret, PublicKey};
 
-struct SecureConnection {
+struct Connection {
     pub stream: Stream,
-    pub cipher: Aes256Gcm,
     pub pty_fd: Option<OwnedFd>,
     pub child_fd: Option<nix::unistd::Pid>,
     pub command_sender: Option<mpsc::Sender<String>>,
@@ -105,17 +97,9 @@ async fn main() -> io::Result<()> {
         println!("New connection");
 
         tokio::spawn(async move {
-            match setup_secure_connection(stream).await {
-                Ok(secure_conn) => {
-                    // If the secure connection is established, handle communication
-                    if let Err(e) = handle_secure_communication(secure_conn).await {
-                        eprintln!("Error during secure communication: {}", e);
-                    }
-                }
-                Err(e) => {
-                    eprintln!("Error setting up secure connection : {}", e);
-                }
-            }
+            let connection = setup_connection(stream);
+            handle_communication(connection).await?;
+            Ok::<(), io::Error>(())
         });
     }
 }
@@ -141,7 +125,7 @@ fn create_pty() -> io::Result<(OwnedFd, nix::unistd::Pid)> {
     }
 }
 
-async fn handle_secure_communication(mut conn: SecureConnection) -> io::Result<()> {
+async fn handle_communication(mut conn: Connection) -> io::Result<()> {
     // Create a PTY and fork the child process
     let (pty_master, child_pid) = create_pty()?;
 
@@ -171,7 +155,7 @@ async fn handle_secure_communication(mut conn: SecureConnection) -> io::Result<(
 }
 
 fn start_pty_handler(
-    conn: &mut SecureConnection,
+    conn: &mut Connection,
     pty_master: OwnedFd,
     cmd_rx: mpsc::Receiver<String>,
 ) {
@@ -365,7 +349,7 @@ async fn handle_output_sender(
 //     |
 //     v
 
-async fn process_client_commands(conn: &mut SecureConnection) -> io::Result<()> {
+async fn process_client_commands(conn: &mut Connection) -> io::Result<()> {
     let stream = &mut conn.stream;
 
     // Create channel for packets to send
@@ -380,7 +364,7 @@ async fn process_client_commands(conn: &mut SecureConnection) -> io::Result<()> 
         tokio::select! {
             // Handle packets to send to client
             Some((code, data)) = packet_rx.recv() => {
-                send_encrypted_packet(stream, &conn.cipher, code, &data).await?;
+                send_packet(stream, code, &data).await?;
             }
 
             // Handle incoming packets from client
@@ -397,8 +381,8 @@ async fn process_client_commands(conn: &mut SecureConnection) -> io::Result<()> 
                             }
                         }
                         Codes::Command => {
-                            if let Some(cmd) =
-                                decrypt_message(&conn.cipher, &packet.nonce, &packet.ciphertext)
+                            if let Ok(cmd) =
+                                String::from_utf8(packet.msg)
                             {
                                 if let Some(tx) = &conn.command_sender {
                                     // We send the command to the PTY handler
@@ -419,81 +403,13 @@ async fn process_client_commands(conn: &mut SecureConnection) -> io::Result<()> 
     }
 }
 
-async fn setup_secure_connection(mut stream: Stream) -> io::Result<SecureConnection> {
-    let stream_ref = &mut stream;
+fn setup_connection(stream: Stream) -> Connection {
 
-    // We read the first packet from the client, which should contain the public key request
-    let client_packet = read_next_packet(stream_ref).await?;
-    if client_packet.code != Codes::PublicKeyRequest {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "Expected PUBLIC_KEY_REQUEST",
-        ));
-    }
-
-    // The client should send his public key of 32 bytes length
-    if client_packet.ciphertext.len() != 32 {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "Invalid public key length",
-        ));
-    }
-
-    // Convert the client's public key from bytes to a PublicKey
-    let mut client_key_bytes = [0u8; 32];
-    client_key_bytes.copy_from_slice(&client_packet.ciphertext);
-    let client_pub_key = PublicKey::from(client_key_bytes);
-
-    // Generate an ephemeral secret key for the server and derive the public key from it
-    let server_priv_key = EphemeralSecret::random_from_rng(OsRng);
-    let server_pub_key = PublicKey::from(&server_priv_key);
-
-    // We create the response packet containing the server's public key
-    let response_packet = Packet::new(
-        Codes::PublicKeyResponse,
-        [0; 12],
-        server_pub_key.as_bytes().to_vec(),
-    );
-
-    // We serialize the response packet
-    let serialized_response = serialize_packet(&response_packet)?;
-    let response_len = serialized_response.len() as u32;
-
-    // We send the length of the response packet first
-    stream_ref
-        .send_stream
-        .write_all(&response_len.to_be_bytes())
-        .await?;
-
-    // Then we send the serialized response packet
-    stream_ref
-        .send_stream
-        .write_all(&serialized_response)
-        .await?;
-
-    // Now we can compute the shared secret using Diffie-Hellman
-    let shared_secret = server_priv_key.diffie_hellman(&client_pub_key);
-
-    // Hash the shared secret to derive the encryption key, again using SHA-256 (for maximum entropy and constant size)
-    let mut hasher = Sha256::default();
-    hasher.update(shared_secret.as_bytes());
-    let encryption_key = hasher.finalize();
-
-    // Initialize the AES-256-GCM cipher with the derived encryption key
-    let cipher = Aes256Gcm::new_from_slice(&encryption_key)
-        .map_err(|_| io::Error::new(io::ErrorKind::Other, "Failed to initialize cipher"))?;
-
-    // Create the secure connection object
-    let secure_conn = SecureConnection {
+    Connection {
         stream,
-        cipher,
         pty_fd: None,
         child_fd: None,
         command_sender: None,
         output_receiver: None,
-    };
-
-    println!("Secure connection established with client");
-
-    Ok(secure_conn)
+    }
 }
