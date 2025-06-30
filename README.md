@@ -2,7 +2,7 @@
 
 Polyrhoé (PRH or `pr`), from the Greek πολύς (many) and ῥοή (flow), is a protocol operating over TCP/IP for multiplexing simultaneous shell connections to multiple remote hosts.
 
-Refer to the [iroh branch](https://github.com/lokasku/pr/tree/iroh) for PR using Iroh instead of TCP/IP.
+Refer to the [iroh branch](https://github.com/lokasku/pr/tree/iroh) for PR using Iroh instead of TCP/IP. I recommend using the Iroh implementation for a more modern and efficient experience.
 
 ## Roadmap
 Due to complications in a [previous collaborative project](https://github.com/lokasku/misc/tree/main/lys) for YH4F 2025 and the time constraints of my final exams, I had to start a completely new project within a tight timeframe of about ten days. The following roadmap outlines its current structure and objectives.
@@ -19,6 +19,7 @@ Due to complications in a [previous collaborative project](https://github.com/lo
 - [x] Tags support
     - [x] Add tags to connections
     - [x] Command dispatch by tag
+- [x] Iroh implementation
 - [ ] Authentication support
     - [ ] Password-based authentication
     - [ ] Whitelist of trusted IP addresses
@@ -78,6 +79,17 @@ cargo run --release --package pr-server -- -p 1789
 By default, the server will listen on port 1736 but you can specify a different port using the `-p` option.
 
 However, in order to connect to a remote machine, the open port must be configured on the router so that it can be accessed remotely. You can still use the server locally for testing purposes.
+
+## Example of local usage
+First, start the server in one terminal :
+```shell
+cargo run --release --package pr-server
+```
+Then, in another terminal, start the client :
+```shell
+cargo run --release --package pr-client
+```
+Finally, add a connection with <kbd>A</kbd> or <kbd>a</kbd> and enter `localhost` as the address and `1736` as the port. You can then switch to this connection and execute commands on it. You are free to add as many connections as you want.
 
 ## Documentation
 For detailed technical documentation, including protocol specifications please refer to the `docs/` directory.
