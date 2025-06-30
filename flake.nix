@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: MPL-2.0
 
 {
+  description = "A protocol for multiplexing simultaneous shell connections to multiple remote hosts.";
+
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs";
     flake-utils = {
