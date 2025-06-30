@@ -18,7 +18,7 @@ use nix::pty::{
 use nix::unistd::{execvp, read, write};
 use rand::rngs::OsRng;
 use sha2::{Digest, Sha256};
-use std::ffi::CString;
+use std::{env, ffi::CString, fs};
 use std::io;
 use std::os::fd::OwnedFd;
 use std::sync::mpsc;
@@ -36,7 +36,35 @@ struct SecureConnection {
 
 #[tokio::main]
 async fn main() -> io::Result<()> {
-    let secret_key = SecretKey::generate(rand::rngs::OsRng);
+
+    let path = env::home_dir()
+        .expect("Failed to get home directory")
+        .join(".pr");
+    let file_path = path.join("private_key"); // Utilisez join() au lieu de concaténation
+
+    let save_key = fs::read_to_string(&file_path);
+
+    let secret_key = match save_key {
+        Ok(key) => {
+            let key = key.trim(); // Supprimez les espaces/retours à la ligne
+            let key_bytes = hex::decode(key)
+                .expect("Failed to decode private key from hex");
+            let key_array: [u8; 32] = key_bytes
+                .try_into()
+                .expect("Private key must be 32 bytes");
+            SecretKey::from_bytes(&key_array)
+        }
+        Err(_) => {
+            eprintln!("No private key found, generating a new one");
+            let secret_key = SecretKey::generate(rand::rngs::OsRng);
+            
+            fs::create_dir_all(&path).expect("Failed to create directory for private key");
+            // Sauvegardez en hex pour être cohérent avec la lecture
+            let hex_key = hex::encode(secret_key.to_bytes());
+            fs::write(&file_path, hex_key).expect("Failed to write private key");
+            secret_key
+        }
+    };
 
     let created_endpoint = Endpoint::builder()
         .secret_key(secret_key)
