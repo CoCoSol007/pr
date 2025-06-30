@@ -8,8 +8,7 @@ use std::collections::HashSet;
 pub enum Actions {
     AddConnection {
         name: String,
-        address: String,
-        port: u16,
+        key: String,
         tags: HashSet<String>,
     },
     ListConnections,

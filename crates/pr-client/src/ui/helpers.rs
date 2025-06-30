@@ -9,7 +9,7 @@ use crossterm::{
 use std::collections::{HashMap, HashSet};
 use std::io::{self, Write, stdout};
 
-use crate::stream;
+use crate::stream::ClientStream;
 
 /// Clear a single line at the specified row
 pub fn clear_line(row: u16) -> io::Result<()> {
@@ -34,7 +34,7 @@ pub fn print_at(row: u16, text: &str) -> io::Result<()> {
 }
 
 /// Display all connections with their tags
-pub fn display_connections(streams: &HashMap<String, stream::Stream>, row: u16) -> io::Result<u16> {
+pub fn display_connections(streams: &HashMap<String, ClientStream>, row: u16) -> io::Result<u16> {
     let mut curr_row = row;
     for (name, stream) in streams {
         print_at(

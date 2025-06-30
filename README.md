@@ -1,6 +1,8 @@
 # ΠP
 
-Polyrhoé (PRH or `pr`), from the Greek πολύς (many) and ῥοή (flow), is a protocol operating over TCP/IP for multiplexing simultaneous shell connections to multiple remote hosts.
+Polyrhoé (PRH or `pr`), from the Greek πολύς (many) and ῥοή (flow), is a protocol operating thanks to [Iroh](https://www.iroh.computer/) for multiplexing simultaneous shell connections to multiple remote hosts.
+
+Refer to the [main branch](https://github.com/lokasku/pr/tree/main) for PR using TCP/IP instead of Iroh.
 
 Refer to the [iroh branch](https://github.com/lokasku/pr/tree/iroh) for PR using Iroh instead of TCP/IP. I recommend using the Iroh implementation for a more modern and efficient experience.
 
@@ -14,7 +16,7 @@ Due to complications in a [previous collaborative project](https://github.com/lo
 - [x] User-friendly client interface
 - [x] Multithreading for the different connections
 - [x] Support for multiple client connections
-- [x] Modern CLI
+- [x] Iroh implementation
 - [x] Documentation
 - [x] Tags support
     - [x] Add tags to connections
@@ -44,6 +46,7 @@ Once you have dependencies installed, clone the project :
 ```shell
 git clone https://github.com/lokasku/pr.git wherever/you/want
 cd wherever/you/want/pr
+git checkout iroh
 ```
 
 ## Usage
@@ -73,12 +76,21 @@ When you switch to a connection, enter the <kbd>%</kbd> to come back the main me
 ### Server
 To start the server, run :
 ```shell
-cargo run --release --package pr-server -- -p 1789
+cargo run --release --package pr-server
 ```
+After starting the server, in order to let someone connect to your machine, you have to give him the key given at initialization.
 
-By default, the server will listen on port 1736 but you can specify a different port using the `-p` option.
-
-However, in order to connect to a remote machine, the open port must be configured on the router so that it can be accessed remotely. You can still use the server locally for testing purposes.
+## Example of local usage
+First, start the server in one terminal :
+```shell
+cargo run --release --package pr-server
+# will output something like : 3c97b2624d38333d57e8cd2622982c79d477ba8172410a48b73e556755082663
+```
+Then, in another terminal, start the client :
+```shell
+cargo run --release --package pr-client
+```
+Finally, add a connection with <kbd>A</kbd> or <kbd>a</kbd> and enter the private key given by the server. You can then switch to this connection and execute commands on it.
 
 ## Example of local usage
 First, start the server in one terminal :
@@ -95,7 +107,7 @@ Finally, add a connection with <kbd>A</kbd> or <kbd>a</kbd> and enter `localhost
 For detailed technical documentation, including protocol specifications please refer to the `docs/` directory.
 
 ## Thanks
-I extend my sincere thanks to [CoCoSol](https://github.com/CoCoSol007) for his valuable support during the final phase of practical testing.
+I extend my sincere thanks to [CoCoSol](https://github.com/CoCoSol007) for his valuable support during the final phase of practical testing, and for helping me implementing PR with Iroh.
 
 ## License
 PR is licensed under the [MPL-2.0](https://www.mozilla.org/en-US/MPL/2.0/) (Mozilla Public License 2.0). See the LICENSE file for mode details.

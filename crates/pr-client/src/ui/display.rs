@@ -5,7 +5,7 @@ use std::collections::HashMap;
 
 use super::helpers::{clear_line, format_tags, print_at};
 use super::input::press_any_key;
-use crate::stream;
+use crate::stream::ClientStream;
 
 /// Display a message and wait for key press
 pub fn show_message_and_wait(message: &str) {
@@ -14,7 +14,7 @@ pub fn show_message_and_wait(message: &str) {
 }
 
 /// Display all connections with their details
-pub fn print_connections(connections: &HashMap<String, stream::Stream>) {
+pub fn print_connections(connections: &HashMap<String, ClientStream>) {
     if connections.is_empty() {
         return show_message_and_wait("No connections");
     }
@@ -29,11 +29,7 @@ pub fn print_connections(connections: &HashMap<String, stream::Stream>) {
     let _ = print_at(start, &format!("Connections ({})", connections.len()));
 
     for (i, (name, stream)) in connections.iter().enumerate() {
-        let addr = stream
-            .stream
-            .peer_addr()
-            .map_or("disconnected".to_string(), |a| a.to_string());
-
+        let addr = stream.stream.security_key.to_string(); // Assuming `id()` returns a string representation of the address
         let mut display_line = format!("  {} -> {}", name, addr);
 
         // Add tags if present

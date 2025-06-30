@@ -8,8 +8,6 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, PartialEq, Encode, Decode, Serialize, Deserialize)]
 pub enum Codes {
     Disconnect,
-    PublicKeyRequest,
-    PublicKeyResponse,
     Command,
     CommandOutput,
     CommandEnd,

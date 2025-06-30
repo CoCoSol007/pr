@@ -1,12 +1,19 @@
 // SPDX-FileCopyrightText: 2025 Lukas <lukasku@proton.me>
 // SPDX-License-Identifier: MPL-2.0
 
-use aes_gcm::Aes256Gcm;
+use common::packet::Stream;
 use std::collections::HashSet;
-use tokio::net::TcpStream;
 
-pub struct Stream {
-    pub stream: TcpStream,
-    pub cipher: Aes256Gcm,
+pub struct ClientStream {
+    pub stream: Stream,
     pub tags: HashSet<String>,
+}
+
+impl ClientStream {
+    pub fn new(stream: Stream) -> Self {
+        Self {
+            stream,
+            tags: HashSet::new(),
+        }
+    }
 }

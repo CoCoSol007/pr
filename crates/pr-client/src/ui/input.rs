@@ -8,8 +8,9 @@ use crossterm::{
 use std::collections::HashMap;
 use std::io::{self, Write, stdout};
 
+use crate::stream::ClientStream;
+
 use super::helpers::{clear_line, clear_lines, print_at};
-use crate::stream;
 
 /// Show an interactive prompt and get user input
 pub fn ask(prompt: &str, row: u16) -> io::Result<String> {
@@ -56,7 +57,7 @@ pub fn ask(prompt: &str, row: u16) -> io::Result<String> {
 
 /// Ask for a selection from a list of connections
 pub fn select_connection(
-    streams: &HashMap<String, stream::Stream>,
+    streams: &HashMap<String, ClientStream>,
     prompt: &str,
     row: u16,
 ) -> io::Result<String> {
