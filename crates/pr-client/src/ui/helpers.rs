@@ -9,7 +9,7 @@ use crossterm::{
 use std::collections::{HashMap, HashSet};
 use std::io::{self, Write, stdout};
 
-use crate::stream::{self, ClientStream};
+use crate::stream::ClientStream;
 
 /// Clear a single line at the specified row
 pub fn clear_line(row: u16) -> io::Result<()> {

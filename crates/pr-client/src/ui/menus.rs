@@ -1,7 +1,6 @@
 // SPDX-FileCopyrightText: 2025 Lukas <lukasku@proton.me>
 // SPDX-License-Identifier: MPL-2.0
 
-use common::packet::Stream;
 use crossterm::{
     event::{Event, KeyCode, read},
     terminal::{disable_raw_mode, enable_raw_mode},
@@ -14,7 +13,7 @@ use super::helpers::{
     clear_line, clear_lines, display_connections, format_tags, parse_tags, print_at,
 };
 use super::input::{ask, press_any_key, select_connection};
-use crate::stream::{self, ClientStream};
+use crate::stream::ClientStream;
 
 /// Display the main menu options
 fn show_menu(row: u16) -> io::Result<()> {
@@ -303,11 +302,7 @@ pub fn prompt(streams: &HashMap<String, ClientStream>) -> io::Result<Actions> {
                             parse_tags(&tags_str)
                         };
 
-                        Actions::AddConnection {
-                            name,
-                            key,
-                            tags,
-                        }
+                        Actions::AddConnection { name, key, tags }
                     }
                     KeyCode::Char('l') | KeyCode::Char('L') => Actions::ListConnections,
                     KeyCode::Char('r') | KeyCode::Char('R') => {

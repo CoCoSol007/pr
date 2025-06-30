@@ -8,15 +8,15 @@ mod ui;
 use aes_gcm::{Aes256Gcm, KeyInit};
 use common::cipher::{decrypt_message, send_encrypted_packet};
 use common::codes::Codes;
-use common::packet::{read_next_packet, serialize_packet, Packet, Stream};
+use common::packet::{Packet, Stream, read_next_packet, serialize_packet};
 use common::rw::get_input;
-use iroh::{Endpoint, NodeAddr, NodeId, PublicKey};
+use iroh::{Endpoint, NodeAddr, NodeId};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::io::{self, Write};
 use std::str::FromStr;
-use tokio::{io::AsyncWriteExt};
-use x25519_dalek::{EphemeralSecret};
+use tokio::io::AsyncWriteExt;
+use x25519_dalek::EphemeralSecret;
 
 use crate::stream::ClientStream;
 use crate::ui::clear_screen;
@@ -31,14 +31,8 @@ async fn main() {
     loop {
         match ui::prompt(&connections) {
             Ok(action) => match action {
-                ui::Actions::AddConnection {
-                    name,
-                    key,
-                    tags,
-                } => {
-                    if let Err(_) =
-                        add_connection(&mut connections, name, key, tags).await
-                    {
+                ui::Actions::AddConnection { name, key, tags } => {
+                    if let Err(_) = add_connection(&mut connections, name, key, tags).await {
                         ui::show_message_and_wait("Connection failed");
                     }
                 }
@@ -212,22 +206,40 @@ async fn add_connection(
     security_key: String,
     tags: HashSet<String>,
 ) -> io::Result<()> {
-    
-    let addr = NodeId::from_str(security_key.trim()).unwrap();
+    let addr = NodeId::from_str(security_key.trim()).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Invalid security key format. Please provide a valid NodeId.",
+        )
+    })?;
     let node = NodeAddr::new(addr);
 
-    let ep = Endpoint::builder().discovery_n0().bind().await.unwrap();
+    let ep = Endpoint::builder().discovery_n0().bind().await.map_err(|e| {
+        io::Error::new(
+            io::ErrorKind::Other,
+            format!("Failed to bind endpoint: {}", e),
+        )
+    })?;
     let Ok(conn) = ep.connect(node, b"my-alpn").await else {
         println!("Failed to connect to the server. Please check the address and try again.");
-        return Err(io::Error::new(io::ErrorKind::ConnectionRefused, "Connection failed"));
+        return Err(io::Error::new(
+            io::ErrorKind::ConnectionRefused,
+            "Connection failed",
+        ));
     };
 
-    let current_stream = conn.open_bi().await.unwrap();
+    let current_stream = conn.open_bi().await.map_err(|e| {
+        io::Error::new(
+            io::ErrorKind::ConnectionRefused,
+            format!("Failed to open bidirectional stream: {}", e),
+        )
+    })?;
     let stream = Stream {
-        recive_stream: current_stream.1,
+        security_key: addr.to_string(),
         send_stream: current_stream.0,
+        recive_stream: current_stream.1,
     };
-    
+
     // If the connection is successful, we set up a secure connection
     let mut secure_stream = setup_secure_connection(stream).await?;
     secure_stream.tags = tags;
@@ -239,8 +251,23 @@ async fn add_connection(
 async fn remove_connection(connections: &mut HashMap<String, ClientStream>, name: String) {
     if let Some(mut stream) = connections.remove(&name) {
         // If the connection is removed, we shutdown the stream
-        stream.stream.send_stream.shutdown().await.unwrap();
-        stream.stream.recive_stream.stop(0u32.into());
+        stream
+            .stream
+            .send_stream
+            .shutdown()
+            .await
+            .map_err(|e| {
+                eprintln!("Failed to shutdown send stream: {}", e);
+            })
+            .ok();
+        stream
+            .stream
+            .recive_stream
+            .stop(0u32.into())
+            .map_err(|e| {
+                eprintln!("Failed to stop receive stream: {}", e);
+            })
+            .ok();
     }
 }
 
@@ -262,7 +289,10 @@ async fn setup_secure_connection(mut stream: Stream) -> io::Result<ClientStream>
 
     // We send the length of the packet "as is" without encryption before the package
     let packet_len = serialized_packet.len() as u32;
-    stream_ref.send_stream.write_all(&packet_len.to_be_bytes()).await?;
+    stream_ref
+        .send_stream
+        .write_all(&packet_len.to_be_bytes())
+        .await?;
 
     // Send the serialized packet itself
     stream_ref.send_stream.write_all(&serialized_packet).await?;
@@ -347,10 +377,10 @@ async fn wait_command_output(stream: &mut ClientStream) -> io::Result<()> {
 async fn communication(stream: &mut ClientStream) -> io::Result<()> {
     // Initialize session and wait for initial prompt
     initialize_session(stream).await?;
-    
+
     // Main command processing loop
     command_loop(stream).await?;
-    
+
     Ok(())
 }
 
@@ -366,7 +396,7 @@ async fn initialize_session(stream: &mut ClientStream) -> io::Result<()> {
 
     // Read the initial command output from the server (usually the prompt of the shell)
     wait_for_initial_prompt(stream).await?;
-    
+
     Ok(())
 }
 
@@ -402,7 +432,9 @@ async fn command_loop(stream: &mut ClientStream) -> io::Result<()> {
             continue;
         }
 
-        if command == "%" /* Exit command */ {
+        if command == "%"
+        /* Exit command */
+        {
             clear_screen();
             break;
         }
@@ -419,6 +451,6 @@ async fn execute_command(stream: &mut ClientStream, command: &str) -> io::Result
 
     // Wait for the command output from the server
     wait_command_output(stream).await?;
-    
+
     Ok(())
 }

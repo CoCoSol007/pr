@@ -7,8 +7,9 @@ use aes_gcm::{Aes256Gcm, KeyInit};
 use common::{
     cipher::{decrypt_message, send_encrypted_packet},
     codes::Codes,
-    packet::{read_next_packet, serialize_packet, Packet, Stream},
+    packet::{Packet, Stream, read_next_packet, serialize_packet},
 };
+use iroh::{Endpoint, SecretKey};
 use nix::fcntl::{FcntlArg, OFlag, fcntl};
 use nix::pty::{
     ForkptyResult::{Child, Parent},
@@ -21,10 +22,8 @@ use std::ffi::CString;
 use std::io;
 use std::os::fd::OwnedFd;
 use std::sync::mpsc;
-use tokio::io::AsyncWriteExt;
 use tokio::task;
 use x25519_dalek::{EphemeralSecret, PublicKey};
-use iroh::{endpoint::{Connecting, RecvStream}, Endpoint, SecretKey};
 
 struct SecureConnection {
     pub stream: Stream,
@@ -37,50 +36,59 @@ struct SecureConnection {
 
 #[tokio::main]
 async fn main() -> io::Result<()> {
-    
     let secret_key = SecretKey::generate(rand::rngs::OsRng);
 
-    let endpoint_res = Endpoint::builder()
+    let created_endpoint = Endpoint::builder()
         .secret_key(secret_key)
         .alpns(vec![b"my-alpn".to_vec()])
         .discovery_n0()
         .bind()
         .await;
 
-    let Ok(endpoint) = endpoint_res else {
-        eprintln!("Failed to bind endpoint: {:?}", endpoint_res);
-        return Err(io::Error::new(io::ErrorKind::Other, "Failed to bind endpoint"));
+    let Ok(endpoint) = created_endpoint else {
+        eprintln!("Failed to bind endpoint: {:?}", created_endpoint.err());
+        return Err(io::Error::new(
+            io::ErrorKind::Other,
+            "Failed to bind endpoint",
+        ));
     };
 
-    println!("Our node id: {}", endpoint.node_id());
+    println!("Public key: {}", endpoint.node_id());
 
     loop {
         let conn = endpoint
             .accept()
             .await
-            .unwrap()
+            .expect("Failed to accept connection")
             .await
-            .unwrap();
+            .expect("Failed to accept connection stream");
 
-        let recv_stream = conn.accept_bi().await.unwrap();
-        let stream = Stream {
-            recive_stream: recv_stream.1,
-            send_stream: recv_stream.0,
+        let Ok(recv_stream) = conn.accept_bi().await else {
+            eprintln!("Failed to accept bidirectional stream");
+            continue;
         };
 
+        let stream: Stream = Stream {
+            security_key: endpoint.node_id().to_string(),
+            send_stream: recv_stream.0,
+            recive_stream: recv_stream.1,
+        };
+
+        println!("New connection");
+
         tokio::spawn(async move {
-                    match setup_secure_connection(stream).await {
-                        Ok(secure_conn) => {
-                            // If the secure connection is established, handle communication
-                            if let Err(e) = handle_secure_communication(secure_conn).await {
-                                eprintln!("Error during secure communication: {}", e);
-                            }
-                        }
-                        Err(e) => {
-                            eprintln!("Error setting up secure connection : {}", e);
-                        }
+            match setup_secure_connection(stream).await {
+                Ok(secure_conn) => {
+                    // If the secure connection is established, handle communication
+                    if let Err(e) = handle_secure_communication(secure_conn).await {
+                        eprintln!("Error during secure communication: {}", e);
                     }
-                });
+                }
+                Err(e) => {
+                    eprintln!("Error setting up secure connection : {}", e);
+                }
+            }
+        });
     }
 }
 
@@ -152,7 +160,7 @@ fn start_pty_handler(
     task::spawn_blocking(move || {
         // Initialize PTY and send initial prompt
         initialize_pty_and_send_prompt(&pty_master, &output_tx);
-        
+
         // Main PTY processing loop
         pty_main_loop(pty_master, cmd_rx, output_tx);
     });
@@ -163,7 +171,7 @@ fn initialize_pty_and_send_prompt(
     output_tx: &tokio::sync::mpsc::UnboundedSender<String>,
 ) {
     let mut buffer = [0u8; 4096];
-    
+
     // Clear the PTY
     write(pty_master, "clear\n".as_bytes()).expect("Failed to clear PTY");
     std::thread::sleep(std::time::Duration::from_millis(200));
@@ -196,7 +204,7 @@ fn pty_main_loop(
     output_tx: tokio::sync::mpsc::UnboundedSender<String>,
 ) {
     let mut buffer = [0u8; 4096];
-    
+
     loop {
         // Check if there is a command to execute
         if let Ok(cmd) = cmd_rx.try_recv() {
@@ -217,10 +225,10 @@ fn handle_refresh_command(
 ) {
     // Clear the PTY screen like we do on initial connection
     write(pty_master, "clear\n".as_bytes()).ok();
-    
+
     // Wait a bit for the clear command to execute
     std::thread::sleep(std::time::Duration::from_millis(100));
-    
+
     // Read any remaining output including the prompt after clear
     let mut counter = 0;
     let mut refresh_output = String::new();
@@ -240,7 +248,7 @@ fn handle_refresh_command(
     if !refresh_output.is_empty() {
         let _ = output_tx.send(refresh_output);
     }
-    
+
     let _ = output_tx.send("__COMMAND_END__".to_string());
 }
 
@@ -285,10 +293,7 @@ fn execute_command(
                 counter = 0;
             }
             // Non-blocking error
-            Err(e)
-                if e == nix::errno::Errno::EAGAIN
-                    || e == nix::errno::Errno::EWOULDBLOCK =>
-            {
+            Err(e) if e == nix::errno::Errno::EAGAIN || e == nix::errno::Errno::EWOULDBLOCK => {
                 counter += 1;
             }
             // Unrecoverable error
@@ -427,10 +432,16 @@ async fn setup_secure_connection(mut stream: Stream) -> io::Result<SecureConnect
     let response_len = serialized_response.len() as u32;
 
     // We send the length of the response packet first
-    stream_ref.send_stream.write_all(&response_len.to_be_bytes()).await?;
+    stream_ref
+        .send_stream
+        .write_all(&response_len.to_be_bytes())
+        .await?;
 
     // Then we send the serialized response packet
-    stream_ref.send_stream.write_all(&serialized_response).await?;
+    stream_ref
+        .send_stream
+        .write_all(&serialized_response)
+        .await?;
 
     // Now we can compute the shared secret using Diffie-Hellman
     let shared_secret = server_priv_key.diffie_hellman(&client_pub_key);

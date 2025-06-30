@@ -29,11 +29,7 @@ pub fn print_connections(connections: &HashMap<String, ClientStream>) {
     let _ = print_at(start, &format!("Connections ({})", connections.len()));
 
     for (i, (name, stream)) in connections.iter().enumerate() {
-        let addr = stream
-            .stream
-            .recive_stream
-            .id()
-            .to_string(); // Assuming `id()` returns a string representation of the address
+        let addr = stream.stream.security_key.to_string(); // Assuming `id()` returns a string representation of the address
         let mut display_line = format!("  {} -> {}", name, addr);
 
         // Add tags if present

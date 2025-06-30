@@ -62,7 +62,10 @@ pub async fn send_encrypted_packet(
     let packet_len = serialized_packet.len() as u32;
 
     // Send the length of the packet first
-    stream.send_stream.write_all(&packet_len.to_be_bytes()).await?;
+    stream
+        .send_stream
+        .write_all(&packet_len.to_be_bytes())
+        .await?;
 
     // Then send the serialized packet
     stream.send_stream.write_all(&serialized_packet).await?;

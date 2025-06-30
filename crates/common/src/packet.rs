@@ -9,8 +9,9 @@ use serde::{Deserialize, Serialize};
 use std::io;
 
 pub struct Stream {
-    pub recive_stream: RecvStream,
     pub send_stream: SendStream,
+    pub recive_stream: RecvStream,
+    pub security_key: String, 
 }
 
 #[derive(Debug, Encode, Decode, Serialize, Deserialize)]
@@ -35,14 +36,32 @@ pub async fn read_next_packet(stream: &mut Stream) -> io::Result<Packet> {
     let mut packet_data = vec![0u8; packet_len];
 
     // Read the exact number of bytes specified by packet_len
-    stream.recive_stream.read_exact(&mut packet_data).await;
+    stream
+        .recive_stream
+        .read_exact(&mut packet_data)
+        .await
+        .map_err(|e| {
+            io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                format!("Failed to read packet data: {}", e),
+            )
+        })?;
     deserialize_packet(&packet_data)
 }
 
 // Reads the first 4 bytes from the stream to determine the length of the packet
 pub async fn get_packet_length(stream: &mut Stream) -> Result<usize, std::io::Error> {
     let mut len_buf = [0u8; 4];
-    stream.recive_stream.read_exact(&mut len_buf).await;
+    stream
+        .recive_stream
+        .read_exact(&mut len_buf)
+        .await
+        .map_err(|e| {
+            io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                format!("Failed to read packet length: {}", e),
+            )
+        })?;
     Ok(u32::from_be_bytes(len_buf) as usize)
 }
 
