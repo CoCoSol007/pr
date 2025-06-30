@@ -8,20 +8,23 @@ mod ui;
 use aes_gcm::{Aes256Gcm, KeyInit};
 use common::cipher::{decrypt_message, send_encrypted_packet};
 use common::codes::Codes;
-use common::packet::{Packet, read_next_packet, serialize_packet};
+use common::packet::{read_next_packet, serialize_packet, Packet, Stream};
 use common::rw::get_input;
+use iroh::{Endpoint, NodeAddr, NodeId, PublicKey};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::io::{self, Write};
-use tokio::{io::AsyncWriteExt, net::TcpStream};
-use x25519_dalek::{EphemeralSecret, PublicKey};
+use std::str::FromStr;
+use tokio::{io::AsyncWriteExt};
+use x25519_dalek::{EphemeralSecret};
 
+use crate::stream::ClientStream;
 use crate::ui::clear_screen;
 
 #[tokio::main]
 async fn main() {
     // [Connection name -> Stream]
-    let mut connections: HashMap<String, stream::Stream> = HashMap::new();
+    let mut connections: HashMap<String, ClientStream> = HashMap::new();
 
     ui::clear_screen();
 
@@ -30,12 +33,11 @@ async fn main() {
             Ok(action) => match action {
                 ui::Actions::AddConnection {
                     name,
-                    address,
-                    port,
+                    key,
                     tags,
                 } => {
                     if let Err(_) =
-                        add_connection(&mut connections, name, address, port, tags).await
+                        add_connection(&mut connections, name, key, tags).await
                     {
                         ui::show_message_and_wait("Connection failed");
                     }
@@ -205,43 +207,49 @@ async fn main() {
 }
 
 async fn add_connection(
-    connections: &mut HashMap<String, stream::Stream>,
+    connections: &mut HashMap<String, ClientStream>,
     name: String,
-    address: String,
-    port: u16,
+    security_key: String,
     tags: HashSet<String>,
 ) -> io::Result<()> {
-    // Try to connect to the server
-    match TcpStream::connect(format!("{}:{}", address, port)).await {
-        Ok(stream) => {
-            // If the connection is successful, we set up a secure connection
-            let mut secure_stream = setup_secure_connection(stream).await?;
-            secure_stream.tags = tags;
-            connections.insert(name, secure_stream);
-        }
-        Err(_) => {
-            return Err(io::Error::new(
-                io::ErrorKind::ConnectionRefused,
-                "Connection failed",
-            ));
-        }
-    }
+    
+    let addr = NodeId::from_str(security_key.trim()).unwrap();
+    let node = NodeAddr::new(addr);
+
+    let ep = Endpoint::builder().discovery_n0().bind().await.unwrap();
+    let Ok(conn) = ep.connect(node, b"my-alpn").await else {
+        println!("Failed to connect to the server. Please check the address and try again.");
+        return Err(io::Error::new(io::ErrorKind::ConnectionRefused, "Connection failed"));
+    };
+
+    let current_stream = conn.open_bi().await.unwrap();
+    let stream = Stream {
+        recive_stream: current_stream.1,
+        send_stream: current_stream.0,
+    };
+    
+    // If the connection is successful, we set up a secure connection
+    let mut secure_stream = setup_secure_connection(stream).await?;
+    secure_stream.tags = tags;
+    connections.insert(name, secure_stream);
+
     Ok(())
 }
 
-async fn remove_connection(connections: &mut HashMap<String, stream::Stream>, name: String) {
+async fn remove_connection(connections: &mut HashMap<String, ClientStream>, name: String) {
     if let Some(mut stream) = connections.remove(&name) {
         // If the connection is removed, we shutdown the stream
-        let _ = stream.stream.shutdown().await;
+        stream.stream.send_stream.shutdown().await.unwrap();
+        stream.stream.recive_stream.stop(0u32.into());
     }
 }
 
-async fn setup_secure_connection(mut stream: TcpStream) -> io::Result<stream::Stream> {
+async fn setup_secure_connection(mut stream: Stream) -> io::Result<ClientStream> {
     let stream_ref = &mut stream;
 
     // Generate an ephemeral secret key for the client and derive the public key from it
     let ephemeral_secret = EphemeralSecret::random_from_rng(rand::rngs::OsRng);
-    let pub_key = PublicKey::from(&ephemeral_secret);
+    let pub_key = x25519_dalek::PublicKey::from(&ephemeral_secret);
 
     // We create a packet containing the client's public key asking for the server's public key
     let packet = Packet::new(
@@ -254,10 +262,10 @@ async fn setup_secure_connection(mut stream: TcpStream) -> io::Result<stream::St
 
     // We send the length of the packet "as is" without encryption before the package
     let packet_len = serialized_packet.len() as u32;
-    stream_ref.write_all(&packet_len.to_be_bytes()).await?;
+    stream_ref.send_stream.write_all(&packet_len.to_be_bytes()).await?;
 
     // Send the serialized packet itself
-    stream_ref.write_all(&serialized_packet).await?;
+    stream_ref.send_stream.write_all(&serialized_packet).await?;
 
     // We get the length of the response packet
     let response_packet = read_next_packet(stream_ref).await?;
@@ -281,7 +289,7 @@ async fn setup_secure_connection(mut stream: TcpStream) -> io::Result<stream::St
     // Convert the response ciphertext to a PublicKey (the one from the server)
     let mut key_bytes = [0u8; 32];
     key_bytes.copy_from_slice(&response_packet.ciphertext);
-    let server_pub_key = PublicKey::from(key_bytes);
+    let server_pub_key = x25519_dalek::PublicKey::from(key_bytes);
 
     // Derive the shared secret using Diffie-Hellman
     let shared_secret = ephemeral_secret.diffie_hellman(&server_pub_key);
@@ -295,7 +303,7 @@ async fn setup_secure_connection(mut stream: TcpStream) -> io::Result<stream::St
     let cipher = Aes256Gcm::new_from_slice(&encryption_key)
         .map_err(|_| io::Error::new(io::ErrorKind::Other, "Failed to initialize cipher"))?;
 
-    let secure_stream = stream::Stream {
+    let secure_stream = ClientStream {
         stream,
         cipher,
         tags: HashSet::new(), // Tags will be added separately if needed
@@ -304,7 +312,7 @@ async fn setup_secure_connection(mut stream: TcpStream) -> io::Result<stream::St
     Ok(secure_stream)
 }
 
-async fn wait_command_output(stream: &mut stream::Stream) -> io::Result<()> {
+async fn wait_command_output(stream: &mut ClientStream) -> io::Result<()> {
     loop {
         let packet_result = read_next_packet(&mut stream.stream).await;
 
@@ -336,7 +344,7 @@ async fn wait_command_output(stream: &mut stream::Stream) -> io::Result<()> {
     }
 }
 
-async fn communication(stream: &mut stream::Stream) -> io::Result<()> {
+async fn communication(stream: &mut ClientStream) -> io::Result<()> {
     // Initialize session and wait for initial prompt
     initialize_session(stream).await?;
     
@@ -346,7 +354,7 @@ async fn communication(stream: &mut stream::Stream) -> io::Result<()> {
     Ok(())
 }
 
-async fn initialize_session(stream: &mut stream::Stream) -> io::Result<()> {
+async fn initialize_session(stream: &mut ClientStream) -> io::Result<()> {
     // Send a packet to refresh the session. Allow us to reset the session state on the server side
     send_encrypted_packet(
         &mut stream.stream,
@@ -362,7 +370,7 @@ async fn initialize_session(stream: &mut stream::Stream) -> io::Result<()> {
     Ok(())
 }
 
-async fn wait_for_initial_prompt(stream: &mut stream::Stream) -> io::Result<()> {
+async fn wait_for_initial_prompt(stream: &mut ClientStream) -> io::Result<()> {
     loop {
         match read_next_packet(&mut stream.stream).await {
             Ok(packet) => match packet.code {
@@ -385,7 +393,7 @@ async fn wait_for_initial_prompt(stream: &mut stream::Stream) -> io::Result<()> 
     Ok(())
 }
 
-async fn command_loop(stream: &mut stream::Stream) -> io::Result<()> {
+async fn command_loop(stream: &mut ClientStream) -> io::Result<()> {
     loop {
         // Get the command input from the user
         let command = get_input("").trim().to_string();
@@ -405,7 +413,7 @@ async fn command_loop(stream: &mut stream::Stream) -> io::Result<()> {
     Ok(())
 }
 
-async fn execute_command(stream: &mut stream::Stream, command: &str) -> io::Result<()> {
+async fn execute_command(stream: &mut ClientStream, command: &str) -> io::Result<()> {
     // Send the command to the server
     send_encrypted_packet(&mut stream.stream, &stream.cipher, Codes::Command, command).await?;
 

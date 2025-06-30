@@ -4,10 +4,14 @@
 use super::codes::Codes;
 use bincode::{self, config};
 use bincode::{Decode, Encode};
+use iroh::endpoint::{RecvStream, SendStream};
 use serde::{Deserialize, Serialize};
 use std::io;
-use tokio::io::AsyncReadExt;
-use tokio::net::TcpStream;
+
+pub struct Stream {
+    pub recive_stream: RecvStream,
+    pub send_stream: SendStream,
+}
 
 #[derive(Debug, Encode, Decode, Serialize, Deserialize)]
 pub struct Packet {
@@ -26,19 +30,19 @@ impl Packet {
     }
 }
 
-pub async fn read_next_packet(stream: &mut TcpStream) -> io::Result<Packet> {
+pub async fn read_next_packet(stream: &mut Stream) -> io::Result<Packet> {
     let packet_len = get_packet_length(stream).await?;
     let mut packet_data = vec![0u8; packet_len];
 
     // Read the exact number of bytes specified by packet_len
-    stream.read_exact(&mut packet_data).await?;
+    stream.recive_stream.read_exact(&mut packet_data).await;
     deserialize_packet(&packet_data)
 }
 
 // Reads the first 4 bytes from the stream to determine the length of the packet
-pub async fn get_packet_length(stream: &mut TcpStream) -> Result<usize, std::io::Error> {
+pub async fn get_packet_length(stream: &mut Stream) -> Result<usize, std::io::Error> {
     let mut len_buf = [0u8; 4];
-    stream.read_exact(&mut len_buf).await?;
+    stream.recive_stream.read_exact(&mut len_buf).await;
     Ok(u32::from_be_bytes(len_buf) as usize)
 }
 

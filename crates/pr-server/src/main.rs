@@ -7,7 +7,7 @@ use aes_gcm::{Aes256Gcm, KeyInit};
 use common::{
     cipher::{decrypt_message, send_encrypted_packet},
     codes::Codes,
-    packet::{Packet, read_next_packet, serialize_packet},
+    packet::{read_next_packet, serialize_packet, Packet, Stream},
 };
 use nix::fcntl::{FcntlArg, OFlag, fcntl};
 use nix::pty::{
@@ -22,12 +22,12 @@ use std::io;
 use std::os::fd::OwnedFd;
 use std::sync::mpsc;
 use tokio::io::AsyncWriteExt;
-use tokio::net::{TcpListener, TcpStream};
 use tokio::task;
 use x25519_dalek::{EphemeralSecret, PublicKey};
+use iroh::{endpoint::{Connecting, RecvStream}, Endpoint, SecretKey};
 
 struct SecureConnection {
-    pub stream: TcpStream,
+    pub stream: Stream,
     pub cipher: Aes256Gcm,
     pub pty_fd: Option<OwnedFd>,
     pub child_fd: Option<nix::unistd::Pid>,
@@ -37,18 +37,38 @@ struct SecureConnection {
 
 #[tokio::main]
 async fn main() -> io::Result<()> {
-    let args = cli::main();
-    let address = format!("0.0.0.0:{}", args.port);
+    
+    let secret_key = SecretKey::generate(rand::rngs::OsRng);
 
-    // Listen for incoming connections on the specified port
-    let listener = TcpListener::bind(&address).await?;
-    println!("Server listening on {}", address);
+    let endpoint_res = Endpoint::builder()
+        .secret_key(secret_key)
+        .alpns(vec![b"my-alpn".to_vec()])
+        .discovery_n0()
+        .bind()
+        .await;
+
+    let Ok(endpoint) = endpoint_res else {
+        eprintln!("Failed to bind endpoint: {:?}", endpoint_res);
+        return Err(io::Error::new(io::ErrorKind::Other, "Failed to bind endpoint"));
+    };
+
+    println!("Our node id: {}", endpoint.node_id());
 
     loop {
-        match listener.accept().await {
-            Ok((stream, addr)) => {
-                println!("New connection from: {}", addr);
-                tokio::spawn(async move {
+        let conn = endpoint
+            .accept()
+            .await
+            .unwrap()
+            .await
+            .unwrap();
+
+        let recv_stream = conn.accept_bi().await.unwrap();
+        let stream = Stream {
+            recive_stream: recv_stream.1,
+            send_stream: recv_stream.0,
+        };
+
+        tokio::spawn(async move {
                     match setup_secure_connection(stream).await {
                         Ok(secure_conn) => {
                             // If the secure connection is established, handle communication
@@ -61,11 +81,6 @@ async fn main() -> io::Result<()> {
                         }
                     }
                 });
-            }
-            Err(e) => {
-                eprintln!("Could not accept connection : {}", e);
-            }
-        }
     }
 }
 
@@ -371,7 +386,7 @@ async fn process_client_commands(conn: &mut SecureConnection) -> io::Result<()> 
     }
 }
 
-async fn setup_secure_connection(mut stream: TcpStream) -> io::Result<SecureConnection> {
+async fn setup_secure_connection(mut stream: Stream) -> io::Result<SecureConnection> {
     let stream_ref = &mut stream;
 
     // We read the first packet from the client, which should contain the public key request
@@ -412,10 +427,10 @@ async fn setup_secure_connection(mut stream: TcpStream) -> io::Result<SecureConn
     let response_len = serialized_response.len() as u32;
 
     // We send the length of the response packet first
-    stream_ref.write_all(&response_len.to_be_bytes()).await?;
+    stream_ref.send_stream.write_all(&response_len.to_be_bytes()).await?;
 
     // Then we send the serialized response packet
-    stream_ref.write_all(&serialized_response).await?;
+    stream_ref.send_stream.write_all(&serialized_response).await?;
 
     // Now we can compute the shared secret using Diffie-Hellman
     let shared_secret = server_priv_key.diffie_hellman(&client_pub_key);

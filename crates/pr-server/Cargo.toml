@@ -21,3 +21,4 @@ rand = "0.8"
 sha2 = "0.10.9"
 bincode = { version = "2.0.1", features = ["derive"] }
 gumdrop = "0.8.1"
+iroh = "0.90.0"

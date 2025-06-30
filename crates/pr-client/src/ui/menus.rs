@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2025 Lukas <lukasku@proton.me>
 // SPDX-License-Identifier: MPL-2.0
 
+use common::packet::Stream;
 use crossterm::{
     event::{Event, KeyCode, read},
     terminal::{disable_raw_mode, enable_raw_mode},
@@ -13,7 +14,7 @@ use super::helpers::{
     clear_line, clear_lines, display_connections, format_tags, parse_tags, print_at,
 };
 use super::input::{ask, press_any_key, select_connection};
-use crate::stream;
+use crate::stream::{self, ClientStream};
 
 /// Display the main menu options
 fn show_menu(row: u16) -> io::Result<()> {
@@ -33,7 +34,7 @@ fn show_modify_menu(row: u16) -> io::Result<()> {
 
 /// Handle adding tags to a connection
 pub fn handle_add_tags(
-    streams: &HashMap<String, stream::Stream>,
+    streams: &HashMap<String, ClientStream>,
     row: u16,
 ) -> io::Result<Option<Actions>> {
     let mut curr_row = row;
@@ -70,7 +71,7 @@ pub fn handle_add_tags(
 
 /// Handle removing tags from a connection
 pub fn handle_remove_tags(
-    streams: &HashMap<String, stream::Stream>,
+    streams: &HashMap<String, ClientStream>,
     row: u16,
 ) -> io::Result<Option<Actions>> {
     let mut curr_row = row;
@@ -120,7 +121,7 @@ pub fn handle_remove_tags(
 
 /// Handle dispatching commands to tagged connections
 pub fn handle_dispatch(
-    streams: &HashMap<String, stream::Stream>,
+    streams: &HashMap<String, ClientStream>,
     row: u16,
 ) -> io::Result<Option<Actions>> {
     // Collect all unique tags in the system
@@ -195,7 +196,7 @@ pub fn handle_dispatch(
 
 /// Handle the modify menu options
 pub fn handle_modify_menu(
-    streams: &HashMap<String, stream::Stream>,
+    streams: &HashMap<String, ClientStream>,
     row: u16,
 ) -> io::Result<Option<Actions>> {
     if streams.is_empty() {
@@ -269,7 +270,7 @@ pub fn handle_modify_menu(
 }
 
 /// Main function processing user input and actions
-pub fn prompt(streams: &HashMap<String, stream::Stream>) -> io::Result<Actions> {
+pub fn prompt(streams: &HashMap<String, ClientStream>) -> io::Result<Actions> {
     let (_, term_rows) = crossterm::terminal::size()?;
     let row = term_rows - 1;
 
@@ -290,17 +291,10 @@ pub fn prompt(streams: &HashMap<String, stream::Stream>) -> io::Result<Actions> 
                             continue;
                         }
 
-                        let address = ask("Address", row)?;
-                        if address.is_empty() {
+                        let key = ask("Public key", row)?;
+                        if key.is_empty() {
                             continue;
                         }
-
-                        let port_str = ask("Port (default: 1736)", row)?;
-                        let port = if port_str.is_empty() {
-                            1736
-                        } else {
-                            port_str.parse::<u16>().unwrap_or(1736)
-                        };
 
                         let tags_str = ask("Tags (comma-separated, optional)", row)?;
                         let tags = if tags_str.is_empty() {
@@ -311,8 +305,7 @@ pub fn prompt(streams: &HashMap<String, stream::Stream>) -> io::Result<Actions> 
 
                         Actions::AddConnection {
                             name,
-                            address,
-                            port,
+                            key,
                             tags,
                         }
                     }

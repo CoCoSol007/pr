@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: 2025 Lukas <lukasku@proton.me>
 // SPDX-License-Identifier: MPL-2.0
 
+use crate::packet::Stream;
+
 use super::codes::Codes;
 use super::packet::{Packet, serialize_packet};
 use aes_gcm::{
@@ -11,7 +13,6 @@ use rand::Rng;
 use rand::rngs::OsRng;
 use std::io;
 use tokio::io::AsyncWriteExt;
-use tokio::net::TcpStream;
 
 pub fn encrypt_message(cipher: &Aes256Gcm, message: &str) -> io::Result<(Vec<u8>, [u8; 12])> {
     let mut nonce_bytes = [0u8; 12];
@@ -48,7 +49,7 @@ pub fn decrypt_message(
 }
 
 pub async fn send_encrypted_packet(
-    stream: &mut TcpStream,
+    stream: &mut Stream,
     cipher: &Aes256Gcm,
     code: Codes,
     message: &str,
@@ -61,12 +62,12 @@ pub async fn send_encrypted_packet(
     let packet_len = serialized_packet.len() as u32;
 
     // Send the length of the packet first
-    stream.write_all(&packet_len.to_be_bytes()).await?;
+    stream.send_stream.write_all(&packet_len.to_be_bytes()).await?;
 
     // Then send the serialized packet
-    stream.write_all(&serialized_packet).await?;
+    stream.send_stream.write_all(&serialized_packet).await?;
 
-    stream.flush().await?;
+    stream.send_stream.flush().await?;
 
     Ok(())
 }

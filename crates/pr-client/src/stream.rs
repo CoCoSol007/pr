@@ -2,11 +2,11 @@
 // SPDX-License-Identifier: MPL-2.0
 
 use aes_gcm::Aes256Gcm;
+use common::packet::Stream;
 use std::collections::HashSet;
-use tokio::net::TcpStream;
 
-pub struct Stream {
-    pub stream: TcpStream,
+pub struct ClientStream {
+    pub stream: Stream,
     pub cipher: Aes256Gcm,
     pub tags: HashSet<String>,
 }
