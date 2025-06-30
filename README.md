@@ -2,6 +2,8 @@
 
 Polyrhoé (PRH or `pr`), from the Greek πολύς (many) and ῥοή (flow), is a protocol operating over TCP/IP for multiplexing simultaneous shell connections to multiple remote hosts.
 
+Refer to the [iroh branch](https://github.com/lokasku/pr/tree/iroh) for PR using Iroh instead of TCP/IP.
+
 ## Roadmap
 Due to complications in a [previous collaborative project](https://github.com/lokasku/misc/tree/main/lys) for YH4F 2025 and the time constraints of my final exams, I had to start a completely new project within a tight timeframe of about ten days. The following roadmap outlines its current structure and objectives.
 
