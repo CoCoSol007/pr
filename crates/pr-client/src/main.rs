@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: MPL-2.0
 
 mod cli;
-mod cmdpr;
 mod stream;
+mod ui;
 
 use aes_gcm::{Aes256Gcm, KeyInit};
 use common::cipher::{decrypt_message, send_encrypted_packet};
@@ -11,40 +11,176 @@ use common::codes::Codes;
 use common::packet::{Packet, read_next_packet, serialize_packet};
 use common::rw::get_input;
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{self, Write};
 use tokio::{io::AsyncWriteExt, net::TcpStream};
 use x25519_dalek::{EphemeralSecret, PublicKey};
 
 #[tokio::main]
 async fn main() {
-    // Connection name -> Stream
+    // [Connection name -> Stream]
     let mut connections: HashMap<String, stream::Stream> = HashMap::new();
 
-    cmdpr::clear_screen();
+    ui::clear_screen();
 
     loop {
-        match cmdpr::prompt(&connections) {
+        match ui::prompt(&connections) {
             Ok(action) => match action {
-                cmdpr::Actions::AddConnection {
+                ui::Actions::AddConnection {
                     name,
                     address,
                     port,
+                    tags,
                 } => {
-                    if let Err(_) = add_connection(&mut connections, name, address, port).await {
-                        cmdpr::show_message_and_wait("Connection failed");
+                    if let Err(_) =
+                        add_connection(&mut connections, name, address, port, tags).await
+                    {
+                        ui::show_message_and_wait("Connection failed");
                     }
                 }
-                cmdpr::Actions::ListConnections => cmdpr::print_connections(&connections),
-                cmdpr::Actions::RemoveConnection(name) => {
+                ui::Actions::ListConnections => ui::print_connections(&connections),
+                ui::Actions::RemoveConnection(name) => {
                     remove_connection(&mut connections, name).await
                 }
-                cmdpr::Actions::SwitchConnection(name) => {
+                ui::Actions::SwitchConnection(name) => {
                     if let Some(stream) = connections.get_mut(&name) {
                         if let Err(_) = communication(stream).await {}
                     }
                 }
-                cmdpr::Actions::Quit => {
+                ui::Actions::RenameConnection { old_name, new_name } => {
+                    if connections.contains_key(&new_name) {
+                        ui::show_message_and_wait(&format!(
+                            "Connection name '{}' already exists",
+                            new_name
+                        ));
+                    } else if let Some(stream) = connections.remove(&old_name) {
+                        connections.insert(new_name.clone(), stream);
+                        ui::show_message_and_wait(&format!(
+                            "Connection renamed from '{}' to '{}'",
+                            old_name, new_name
+                        ));
+                    } else {
+                        ui::show_message_and_wait(&format!("Connection '{}' not found", old_name));
+                    }
+                }
+                ui::Actions::AddTags { name, tags } => {
+                    if let Some(stream) = connections.get_mut(&name) {
+                        let original_count = stream.tags.len();
+                        stream.tags.extend(tags.clone());
+
+                        let new_count = stream.tags.len();
+                        let new_tags_count = new_count - original_count;
+
+                        if new_tags_count > 0 {
+                            ui::show_message_and_wait(&format!(
+                                "{} new tag(s) added to {}",
+                                new_tags_count, name
+                            ));
+                        } else {
+                            ui::show_message_and_wait(&format!(
+                                "All tags already exist for {}",
+                                name
+                            ));
+                        }
+                    } else {
+                        ui::show_message_and_wait(&format!("Connection {} not found", name));
+                    }
+                }
+                ui::Actions::RemoveTags { name, tags } => {
+                    if let Some(stream) = connections.get_mut(&name) {
+                        let mut removed_count = 0;
+                        let mut not_found = Vec::new();
+
+                        for tag in &tags {
+                            if stream.tags.remove(tag) {
+                                removed_count += 1;
+                            } else {
+                                not_found.push(tag);
+                            }
+                        }
+
+                        if removed_count > 0 {
+                            let message = format!("{} tag(s) removed from {}", removed_count, name);
+                            if !not_found.is_empty() {
+                                let not_found_str = not_found
+                                    .iter()
+                                    .map(|s| s.as_str())
+                                    .collect::<Vec<&str>>()
+                                    .join(", ");
+                                ui::show_message_and_wait(&format!(
+                                    "{}. Tag(s) not found: {}",
+                                    message, not_found_str
+                                ));
+                            } else {
+                                ui::show_message_and_wait(&message);
+                            }
+                        } else {
+                            ui::show_message_and_wait(&format!(
+                                "No matching tags found for {}",
+                                name
+                            ));
+                        }
+                    } else {
+                        ui::show_message_and_wait(&format!("Connection {} not found", name));
+                    }
+                }
+                ui::Actions::RunCommandByTag(tag, command) => {
+                    // Find all connections with this tag
+                    let matching_connections: Vec<String> = connections
+                        .iter()
+                        .filter_map(|(name, stream)| {
+                            if stream.tags.contains(&tag) {
+                                Some(name.clone())
+                            } else {
+                                None
+                            }
+                        })
+                        .collect();
+
+                    if matching_connections.is_empty() {
+                        ui::show_message_and_wait(&format!("No connections with tag '{}'", tag));
+                        continue;
+                    }
+
+                    // Execute the command on all matching connections
+                    ui::clear_screen();
+                    println!("Executing '{}' on connections with tag '{}':", command, tag);
+                    println!(
+                        "Targeting {} connection(s): {}",
+                        matching_connections.len(),
+                        matching_connections.join(", ")
+                    );
+                    println!("\n--- Command Results ---\n");
+
+                    // Run the command on each connection and collect outputs
+                    for name in &matching_connections {
+                        if let Some(stream) = connections.get_mut(name) {
+                            println!("\n[{}]", name);
+
+                            // We execute the command asynchronously
+                            match async {
+                                // Send command to the server
+                                send_encrypted_packet(&mut stream.stream, &stream.cipher, Codes::Command, &command).await?;
+                                
+                                // Wait for the output
+                                wait_command_output(stream).await?;
+                                
+                                Ok::<(), io::Error>(())
+                            }.await {
+                                Ok(_) => {},
+                                Err(err) => println!("Error: {}", err),
+                            }
+                        }
+                    }
+
+                    println!("\n--- End of Results ---");
+
+                    // Wait for user input before returning to menu
+                    println!("\nPress Enter to continue...");
+                    let _ = std::io::stdin().read_line(&mut String::new());
+                    ui::clear_screen();
+                }
+                ui::Actions::Quit => {
                     break;
                 }
             },
@@ -60,12 +196,14 @@ async fn add_connection(
     name: String,
     address: String,
     port: u16,
+    tags: HashSet<String>,
 ) -> io::Result<()> {
     // Try to connect to the server
     match TcpStream::connect(format!("{}:{}", address, port)).await {
         Ok(stream) => {
             // If the connection is successful, we set up a secure connection
-            let secure_stream = setup_secure_connection(stream).await?;
+            let mut secure_stream = setup_secure_connection(stream).await?;
+            secure_stream.tags = tags;
             connections.insert(name, secure_stream);
         }
         Err(_) => {
@@ -144,9 +282,46 @@ async fn setup_secure_connection(mut stream: TcpStream) -> io::Result<stream::St
     let cipher = Aes256Gcm::new_from_slice(&encryption_key)
         .map_err(|_| io::Error::new(io::ErrorKind::Other, "Failed to initialize cipher"))?;
 
-    let secure_stream = stream::Stream { stream, cipher };
+    let secure_stream = stream::Stream {
+        stream,
+        cipher,
+        tags: HashSet::new(), // Tags will be added separately if needed
+    };
 
     Ok(secure_stream)
+}
+
+async fn wait_command_output(stream: &mut stream::Stream) -> io::Result<()> {
+    loop {
+        // Either get the next packet or wait for a 50ms
+        // YOU MIGHT NEED TO INCREASE THE TIMEOUT DEPENDING ON YOUR NETWORK CONDITIONS
+        let packet_result = tokio::select! {
+            _ = tokio::time::sleep(tokio::time::Duration::from_millis(50)) => continue,
+            packet = read_next_packet(&mut stream.stream) => packet
+        };
+
+        match packet_result {
+            Ok(packet) => match packet.code {
+                Codes::CommandOutput => {
+                    if let Some(message) =
+                        decrypt_message(&stream.cipher, &packet.nonce, &packet.ciphertext)
+                    {
+                        // Print the command output
+                        print!("{}", message);
+                        std::io::stdout().flush().unwrap();
+                    }
+                }
+                Codes::CommandEnd => {
+                    // We have reached the end of the command output
+                    return Ok(());
+                }
+                _ => {}
+            },
+            Err(e) => {
+                return Err(e);
+            }
+        }
+    }
 }
 
 async fn communication(stream: &mut stream::Stream) -> io::Result<()> {
@@ -198,36 +373,7 @@ async fn communication(stream: &mut stream::Stream) -> io::Result<()> {
         send_encrypted_packet(&mut stream.stream, &stream.cipher, Codes::Command, &command).await?;
 
         // Wait for the command output from the server
-        loop {
-            // Either get the next packet or wait for a 50ms
-            // YOU MIGHT NEED TO INCREASE THE TIMEOUT DEPENDING ON YOUR NETWORK CONDITIONS
-            let packet_result = tokio::select! {
-                _ = tokio::time::sleep(tokio::time::Duration::from_millis(50)) => continue,
-                packet = read_next_packet(&mut stream.stream) => packet
-            };
-
-            match packet_result {
-                Ok(packet) => match packet.code {
-                    Codes::CommandOutput => {
-                        if let Some(message) =
-                            decrypt_message(&stream.cipher, &packet.nonce, &packet.ciphertext)
-                        {   
-                            // Print the command output
-                            print!("{}", message);
-                            std::io::stdout().flush().unwrap();
-                        }
-                    }
-                    Codes::CommandEnd => {
-                        // We have reached the end of the command output
-                        break;
-                    }
-                    _ => {}
-                },
-                Err(_) => {
-                    break;
-                }
-            }
-        }
+        wait_command_output(stream).await?;
     }
 
     Ok(())

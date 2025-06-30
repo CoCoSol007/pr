@@ -17,15 +17,11 @@ pub struct Packet {
 }
 
 impl Packet {
-    pub fn new(
-        code: Codes,
-        nonce: [u8; 12],
-        ciphertext: Vec<u8>,
-    ) -> Self {
+    pub fn new(code: Codes, nonce: [u8; 12], ciphertext: Vec<u8>) -> Self {
         Self {
             code,
             nonce,
-            ciphertext
+            ciphertext,
         }
     }
 }
