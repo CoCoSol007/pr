@@ -77,6 +77,18 @@ cargo run --release --package pr-server
 ```
 After starting the server, in order to let someone connect to your machine, you have to give him the key given at initialization.
 
+## Example of local usage
+First, start the server in one terminal :
+```shell
+cargo run --release --package pr-server
+# will output something like : 3c97b2624d38333d57e8cd2622982c79d477ba8172410a48b73e556755082663
+```
+Then, in another terminal, start the client :
+```shell
+cargo run --release --package pr-client
+```
+Finally, add a connection with <kbd>A</kbd> or <kbd>a</kbd> and enter the private key given by the server. You can then switch to this connection and execute commands on it.
+
 ## Documentation
 For detailed technical documentation, including protocol specifications please refer to the `docs/` directory.
 
