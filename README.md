@@ -14,12 +14,12 @@ Due to complications in a [previous collaborative project](https://github.com/lo
 - [x] Support for multiple client connections
 - [x] Modern CLI
 - [x] Documentation
+- [x] Tags support
+    - [x] Add tags to connections
+    - [x] Command dispatch by tag
 - [ ] Authentication support
     - [ ] Password-based authentication
     - [ ] Whitelist of trusted IP addresses
-- [ ] Tags support
-    - [ ] Add tags to connections
-    - [ ] Command dispatch by tag
 - [ ] [Macro](https://en.wikipedia.org/wiki/Macro_(computer_science)) support
     - [ ] Per-machine variable substitution in commands (e.g. `{{ip}}`)
     - [ ] Define macros with variables
@@ -50,7 +50,20 @@ To start the client, run the following command at the root of the repository :
 cargo run --release --package pr-client
 ```
 
-Then, an interactive interface will be displayed, allowing you to add a connection to a remote host (<kbd>A</kbd> or <kbd>a</kbd>), list all established connections (<kbd>L</kbd> or <kbd>l</kbd>), remove a connection (<kbd>R</kbd> or <kbd>r</kbd>), switch to a connection (<kbd>S</kbd> or <kbd>s</kbd>), or exit the client (<kbd>Q</kbd> or <kbd>q</kbd>). At any time, you can press **Esc** to return to the main menu.
+Then, an interactive interface will be displayed, allowing you to :
+- <kbd>A</kbd> or <kbd>a</kbd> : Add a connection to a remote host
+- <kbd>L</kbd> or <kbd>l</kbd> : List all established connections
+- <kbd>R</kbd> or <kbd>r</kbd> : Remove a connection
+- <kbd>S</kbd> or <kbd>s</kbd> : Switch to a connection
+- <kbd>M</kbd> or <kbd>m</kbd> : Modify a connection
+    * <kbd>N</kbd> or <kbd>n</kbd> : Change the name of a connection
+    * <kbd>A</kbd> or <kbd>a</kbd> : Add tags to a connection
+    * <kbd>R</kbd> or <kbd>R</kbd> : Remove tags from a connection
+    * <kbd>B</kbd> or <kbd>b</kbd> : Go back to the menu
+- <kbd>D</kbd> or <kbd>d</kbd> : Dispatch a command given tags
+    * Enter the tags to dispatch the command to, separated by commas (e.g. `tag1,tag2`)
+    * Enter the command to execute on the selected connections
+- <kbd>Q</kbd> or <kbd>q</kbd> : Exit the client
 
 When you switch to a connection, enter the <kbd>%</kbd> to come back the main menu. The connection will remain active in the background, allowing you to switch back to it at any time.
 
@@ -66,6 +79,9 @@ However, in order to connect to a remote machine, the open port must be configur
 
 ## Documentation
 For detailed technical documentation, including protocol specifications please refer to the `docs/` directory.
+
+## Thanks
+I extend my sincere thanks to [CoCoSol](https://github.com/CoCoSol007) for his valuable support during the final phase of practical testing.
 
 ## License
 PR is licensed under the [MPL-2.0](https://www.mozilla.org/en-US/MPL/2.0/) (Mozilla Public License 2.0). See the LICENSE file for mode details.
