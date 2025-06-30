@@ -234,10 +234,10 @@ async fn add_connection(
         recive_stream: current_stream.1,
     };
 
-    // If the connection is successful, we set up a secure connection
-    let mut secure_stream = setup_connection(stream).await?;
-    secure_stream.tags = tags;
-    connections.insert(name, secure_stream);
+    // If the connection is successful, we set up a connection
+    let mut stream = ClientStream::new(stream);
+    stream.tags = tags;
+    connections.insert(name, stream);
 
     Ok(())
 }
@@ -263,16 +263,6 @@ async fn remove_connection(connections: &mut HashMap<String, ClientStream>, name
             })
             .ok();
     }
-}
-
-async fn setup_connection(stream: Stream) -> io::Result<ClientStream> {
-    
-    let secure_stream = ClientStream {
-        stream,
-        tags: HashSet::new(),
-    };
-
-    Ok(secure_stream)
 }
 
 async fn wait_command_output(stream: &mut ClientStream) -> io::Result<()> {

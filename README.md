@@ -1,6 +1,6 @@
 # ΠP
 
-Polyrhoé (PRH or `pr`), from the Greek πολύς (many) and ῥοή (flow), is a protocol operating over TCP/IP for multiplexing simultaneous shell connections to multiple remote hosts.
+Polyrhoé (PRH or `pr`), from the Greek πολύς (many) and ῥοή (flow), is a protocol operating thanks to [iroh](https://www.iroh.computer/) for multiplexing simultaneous shell connections to multiple remote hosts.
 
 ## Roadmap
 Due to complications in a [previous collaborative project](https://github.com/lokasku/misc/tree/main/lys) for YH4F 2025 and the time constraints of my final exams, I had to start a completely new project within a tight timeframe of about ten days. The following roadmap outlines its current structure and objectives.
@@ -12,7 +12,7 @@ Due to complications in a [previous collaborative project](https://github.com/lo
 - [x] User-friendly client interface
 - [x] Multithreading for the different connections
 - [x] Support for multiple client connections
-- [x] Modern CLI
+- [x] Iroh implementation
 - [x] Documentation
 - [x] Tags support
     - [x] Add tags to connections
@@ -41,6 +41,7 @@ Once you have dependencies installed, clone the project :
 ```shell
 git clone https://github.com/lokasku/pr.git wherever/you/want
 cd wherever/you/want/pr
+git checkout iroh
 ```
 
 ## Usage
@@ -70,18 +71,15 @@ When you switch to a connection, enter the <kbd>%</kbd> to come back the main me
 ### Server
 To start the server, run :
 ```shell
-cargo run --release --package pr-server -- -p 1789
+cargo run --release --package pr-server
 ```
-
-By default, the server will listen on port 1736 but you can specify a different port using the `-p` option.
-
-However, in order to connect to a remote machine, the open port must be configured on the router so that it can be accessed remotely. You can still use the server locally for testing purposes.
+After starting the server, in order to let someone connect to your machine, you have to give him the key given at initialization.
 
 ## Documentation
 For detailed technical documentation, including protocol specifications please refer to the `docs/` directory.
 
 ## Thanks
-I extend my sincere thanks to [CoCoSol](https://github.com/CoCoSol007) for his valuable support during the final phase of practical testing.
+I extend my sincere thanks to [CoCoSol](https://github.com/CoCoSol007) for his valuable support during the final phase of practical testing, and for helping me implementing PR with Iroh.
 
 ## License
 PR is licensed under the [MPL-2.0](https://www.mozilla.org/en-US/MPL/2.0/) (Mozilla Public License 2.0). See the LICENSE file for mode details.

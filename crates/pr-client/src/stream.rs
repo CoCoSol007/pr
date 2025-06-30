@@ -8,3 +8,12 @@ pub struct ClientStream {
     pub stream: Stream,
     pub tags: HashSet<String>,
 }
+
+impl ClientStream {
+    pub fn new(stream: Stream) -> Self {
+        Self {
+            stream,
+            tags: HashSet::new(),
+        }
+    }
+}
