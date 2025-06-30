@@ -16,6 +16,8 @@ use std::io::{self, Write};
 use tokio::{io::AsyncWriteExt, net::TcpStream};
 use x25519_dalek::{EphemeralSecret, PublicKey};
 
+use crate::ui::clear_screen;
+
 #[tokio::main]
 async fn main() {
     // [Connection name -> Stream]
@@ -95,6 +97,7 @@ async fn main() {
                             if stream.tags.remove(tag) {
                                 removed_count += 1;
                             } else {
+                                // for tags that don't exist in the actual connection's tags
                                 not_found.push(tag);
                             }
                         }
@@ -181,10 +184,12 @@ async fn main() {
                         }
                     }
 
-                    println!("\n--- End of Results ---");
+                    println!("\n--- End of results ---");
 
                     // Wait for user input before returning to menu
                     println!("\nPress Enter to continue...");
+
+                    // Wait for any input to continue
                     let _ = std::io::stdin().read_line(&mut String::new());
                     ui::clear_screen();
                 }
@@ -301,12 +306,6 @@ async fn setup_secure_connection(mut stream: TcpStream) -> io::Result<stream::St
 
 async fn wait_command_output(stream: &mut stream::Stream) -> io::Result<()> {
     loop {
-        // Either get the next packet or wait for a 50ms
-        // YOU MIGHT NEED TO INCREASE THE TIMEOUT DEPENDING ON YOUR NETWORK CONDITIONS
-        // let packet_result = tokio::select! {
-        //     _ = tokio::time::sleep(tokio::time::Duration::from_millis(50)) => continue,
-        //     packet = read_next_packet(&mut stream.stream) => packet
-        // };
         let packet_result = read_next_packet(&mut stream.stream).await;
 
         match packet_result {
@@ -338,6 +337,16 @@ async fn wait_command_output(stream: &mut stream::Stream) -> io::Result<()> {
 }
 
 async fn communication(stream: &mut stream::Stream) -> io::Result<()> {
+    // Initialize session and wait for initial prompt
+    initialize_session(stream).await?;
+    
+    // Main command processing loop
+    command_loop(stream).await?;
+    
+    Ok(())
+}
+
+async fn initialize_session(stream: &mut stream::Stream) -> io::Result<()> {
     // Send a packet to refresh the session. Allow us to reset the session state on the server side
     send_encrypted_packet(
         &mut stream.stream,
@@ -348,6 +357,12 @@ async fn communication(stream: &mut stream::Stream) -> io::Result<()> {
     .await?;
 
     // Read the initial command output from the server (usually the prompt of the shell)
+    wait_for_initial_prompt(stream).await?;
+    
+    Ok(())
+}
+
+async fn wait_for_initial_prompt(stream: &mut stream::Stream) -> io::Result<()> {
     loop {
         match read_next_packet(&mut stream.stream).await {
             Ok(packet) => match packet.code {
@@ -367,8 +382,10 @@ async fn communication(stream: &mut stream::Stream) -> io::Result<()> {
             Err(_) => break,
         }
     }
+    Ok(())
+}
 
-    // Main loop for sending commands to the server
+async fn command_loop(stream: &mut stream::Stream) -> io::Result<()> {
     loop {
         // Get the command input from the user
         let command = get_input("").trim().to_string();
@@ -377,17 +394,23 @@ async fn communication(stream: &mut stream::Stream) -> io::Result<()> {
             continue;
         }
 
-        if command == "%" {
-            // Exit command
+        if command == "%" /* Exit command */ {
+            clear_screen();
             break;
         }
 
-        // Send the command to the server
-        send_encrypted_packet(&mut stream.stream, &stream.cipher, Codes::Command, &command).await?;
-
-        // Wait for the command output from the server
-        wait_command_output(stream).await?;
+        // Send and process the command
+        execute_command(stream, &command).await?;
     }
+    Ok(())
+}
 
+async fn execute_command(stream: &mut stream::Stream, command: &str) -> io::Result<()> {
+    // Send the command to the server
+    send_encrypted_packet(&mut stream.stream, &stream.cipher, Codes::Command, command).await?;
+
+    // Wait for the command output from the server
+    wait_command_output(stream).await?;
+    
     Ok(())
 }
