@@ -66,5 +66,7 @@ pub async fn send_encrypted_packet(
     // Then send the serialized packet
     stream.write_all(&serialized_packet).await?;
 
+    stream.flush().await?;
+
     Ok(())
 }

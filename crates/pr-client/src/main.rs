@@ -160,14 +160,22 @@ async fn main() {
                             // We execute the command asynchronously
                             match async {
                                 // Send command to the server
-                                send_encrypted_packet(&mut stream.stream, &stream.cipher, Codes::Command, &command).await?;
-                                
+                                send_encrypted_packet(
+                                    &mut stream.stream,
+                                    &stream.cipher,
+                                    Codes::Command,
+                                    &command,
+                                )
+                                .await?;
+
                                 // Wait for the output
                                 wait_command_output(stream).await?;
-                                
+
                                 Ok::<(), io::Error>(())
-                            }.await {
-                                Ok(_) => {},
+                            }
+                            .await
+                            {
+                                Ok(_) => {}
                                 Err(err) => println!("Error: {}", err),
                             }
                         }
@@ -295,10 +303,11 @@ async fn wait_command_output(stream: &mut stream::Stream) -> io::Result<()> {
     loop {
         // Either get the next packet or wait for a 50ms
         // YOU MIGHT NEED TO INCREASE THE TIMEOUT DEPENDING ON YOUR NETWORK CONDITIONS
-        let packet_result = tokio::select! {
-            _ = tokio::time::sleep(tokio::time::Duration::from_millis(50)) => continue,
-            packet = read_next_packet(&mut stream.stream) => packet
-        };
+        // let packet_result = tokio::select! {
+        //     _ = tokio::time::sleep(tokio::time::Duration::from_millis(50)) => continue,
+        //     packet = read_next_packet(&mut stream.stream) => packet
+        // };
+        let packet_result = read_next_packet(&mut stream.stream).await;
 
         match packet_result {
             Ok(packet) => match packet.code {
@@ -318,6 +327,10 @@ async fn wait_command_output(stream: &mut stream::Stream) -> io::Result<()> {
                 _ => {}
             },
             Err(e) => {
+                // Don't return error for timeout, just continue
+                if e.kind() == io::ErrorKind::TimedOut || e.kind() == io::ErrorKind::WouldBlock {
+                    continue;
+                }
                 return Err(e);
             }
         }

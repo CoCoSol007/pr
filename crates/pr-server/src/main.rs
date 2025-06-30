@@ -32,13 +32,13 @@ struct SecureConnection {
     pub pty_fd: Option<OwnedFd>,
     pub child_fd: Option<nix::unistd::Pid>,
     pub command_sender: Option<mpsc::Sender<String>>,
-    pub output_receiver: Option<mpsc::Receiver<String>>,
+    pub output_receiver: Option<tokio::sync::mpsc::UnboundedReceiver<String>>,
 }
 
 #[tokio::main]
 async fn main() -> io::Result<()> {
     let args = cli::main();
-    let address = format!("127.0.0.1:{}", args.port);
+    let address = format!("0.0.0.0:{}", args.port);
 
     // Listen for incoming connections on the specified port
     let listener = TcpListener::bind(&address).await?;
@@ -130,183 +130,241 @@ fn start_pty_handler(
     fcntl(&pty_master, FcntlArg::F_SETFL(new_flags)).expect("Failed to set fd flags");
 
     // Create a channel for sending output back to the client
-    let (output_tx, output_rx) = mpsc::channel::<String>();
-
+    let (output_tx, output_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
     conn.output_receiver = Some(output_rx);
 
-    // Prepare a buffer for reading from the PTY
-    let mut buffer = [0u8; 4096];
-    let mut initial_output = String::new();
-
-    // Clear the PTY
-    write(&pty_master, "clear\n".as_bytes()).expect("Failed to clear PTY");
-
-    std::thread::sleep(std::time::Duration::from_millis(200));
-
     // Spawn a blocking task to handle the PTY
-    // This task will read from the PTY and send output back to the client
     task::spawn_blocking(move || {
-        loop {
-            // Read essentially the prompt as we just cleared the PTY
-            match read(&pty_master, &mut buffer) {
-                Ok(n) if n > 0 => {
-                    let output = String::from_utf8_lossy(&buffer[0..n]).to_string();
-                    initial_output.push_str(&output);
-                }
-                Err(e) if e == nix::errno::Errno::EAGAIN || e == nix::errno::Errno::EWOULDBLOCK => {
-                    break;
-                }
-                _ => break,
-            }
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
-
-        // Send the initial output to the client (usually the prompt of the shell)
-        if !initial_output.is_empty() {
-            output_tx.send(initial_output).ok();
-        }
-
-        loop {
-            // Check if there is a command to execute
-            if let Ok(cmd) = cmd_rx.try_recv() {
-                // If the command is "__REFRESH__", we clear the PTY and read until no more output is available
-                if cmd == "__REFRESH__" {
-                    let mut counter = 0;
-                    while counter < 10 {
-                        match read(&pty_master, &mut buffer) {
-                            Ok(n) if n > 0 => counter = 0,
-                            _ => counter += 1,
-                        }
-                        std::thread::sleep(std::time::Duration::from_millis(2));
-                    }
-
-                    output_tx.send("__COMMAND_END__".to_string()).ok();
-                    continue;
-                }
-
-                // We execute the command on the PTY
-                if let Err(e) = write(&pty_master, format!("{}\n", cmd).as_bytes()) {
-                    eprintln!("Failed to write command: {}", e);
-                    continue;
-                }
-
-                let mut counter = 0;
-                let mut skipped = false;
-
-                // Read the output of the command
-                while counter < 50 {
-                    match read(&pty_master, &mut buffer) {
-                        // Successfully read some data
-                        Ok(n) if n > 0 => {
-                            let output = String::from_utf8_lossy(&buffer[0..n]).to_string();
-
-                            // The first output with at the beginning the command itself
-                            if !skipped {
-                                if let Some(pos) = output.find('\n') {
-                                    // We remove the command line and send everything that follows
-                                    let filtered = &output[pos + 1..];
-                                    if !filtered.is_empty() {
-                                        output_tx.send(filtered.to_string()).ok();
-                                    }
-                                    skipped = true;
-                                }
-                            } else {
-                                // After skipping the command line, we send everything directly
-                                if !output.is_empty() {
-                                    output_tx.send(output).ok();
-                                }
-                            }
-                            counter = 0;
-                        }
-                        // Non-blocking error
-                        Err(e)
-                            if e == nix::errno::Errno::EAGAIN
-                                || e == nix::errno::Errno::EWOULDBLOCK =>
-                        {
-                            counter += 1;
-                        }
-                        // Unrecoverable error
-                        Err(e) => {
-                            if e == nix::errno::Errno::EBADF {
-                                return;
-                            }
-                            break;
-                        }
-                        _ => {
-                            counter += 1;
-                        }
-                    }
-                    std::thread::sleep(std::time::Duration::from_millis(20));
-                }
-
-                // If we got here, it means the command has ended
-                output_tx.send("__COMMAND_END__".to_string()).ok();
-            }
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
+        // Initialize PTY and send initial prompt
+        initialize_pty_and_send_prompt(&pty_master, &output_tx);
+        
+        // Main PTY processing loop
+        pty_main_loop(pty_master, cmd_rx, output_tx);
     });
 }
+
+fn initialize_pty_and_send_prompt(
+    pty_master: &OwnedFd,
+    output_tx: &tokio::sync::mpsc::UnboundedSender<String>,
+) {
+    let mut buffer = [0u8; 4096];
+    
+    // Clear the PTY
+    write(pty_master, "clear\n".as_bytes()).expect("Failed to clear PTY");
+    std::thread::sleep(std::time::Duration::from_millis(200));
+
+    // Read the initial prompt after clear
+    let mut initial_output = String::new();
+    loop {
+        match read(pty_master, &mut buffer) {
+            Ok(n) if n > 0 => {
+                let output = String::from_utf8_lossy(&buffer[0..n]).to_string();
+                initial_output.push_str(&output);
+            }
+            Err(e) if e == nix::errno::Errno::EAGAIN || e == nix::errno::Errno::EWOULDBLOCK => {
+                break;
+            }
+            _ => break,
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+
+    // Send the initial output to the client (usually the prompt of the shell)
+    if !initial_output.is_empty() {
+        let _ = output_tx.send(initial_output);
+    }
+}
+
+fn pty_main_loop(
+    pty_master: OwnedFd,
+    cmd_rx: mpsc::Receiver<String>,
+    output_tx: tokio::sync::mpsc::UnboundedSender<String>,
+) {
+    let mut buffer = [0u8; 4096];
+    
+    loop {
+        // Check if there is a command to execute
+        if let Ok(cmd) = cmd_rx.try_recv() {
+            if cmd == "__REFRESH__" {
+                handle_refresh_command(&pty_master, &output_tx, &mut buffer);
+            } else {
+                execute_command(&pty_master, &cmd, &output_tx, &mut buffer);
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
+fn handle_refresh_command(
+    pty_master: &OwnedFd,
+    output_tx: &tokio::sync::mpsc::UnboundedSender<String>,
+    buffer: &mut [u8; 4096],
+) {
+    // Clear the PTY screen like we do on initial connection
+    write(pty_master, "clear\n".as_bytes()).ok();
+    
+    // Wait a bit for the clear command to execute
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    
+    // Read any remaining output including the prompt after clear
+    let mut counter = 0;
+    let mut refresh_output = String::new();
+    while counter < 20 {
+        match read(pty_master, buffer) {
+            Ok(n) if n > 0 => {
+                let output = String::from_utf8_lossy(&buffer[0..n]).to_string();
+                refresh_output.push_str(&output);
+                counter = 0;
+            }
+            _ => counter += 1,
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+
+    // Send the output (which should include the prompt) to show current state
+    if !refresh_output.is_empty() {
+        let _ = output_tx.send(refresh_output);
+    }
+    
+    let _ = output_tx.send("__COMMAND_END__".to_string());
+}
+
+fn execute_command(
+    pty_master: &OwnedFd,
+    cmd: &str,
+    output_tx: &tokio::sync::mpsc::UnboundedSender<String>,
+    buffer: &mut [u8; 4096],
+) {
+    // Execute the command on the PTY
+    if let Err(e) = write(pty_master, format!("{}\n", cmd).as_bytes()) {
+        eprintln!("Failed to write command: {}", e);
+        return;
+    }
+
+    let mut counter = 0;
+    let mut skipped = false;
+
+    // Read the output of the command
+    while counter < 50 {
+        match read(pty_master, buffer) {
+            // Successfully read some data
+            Ok(n) if n > 0 => {
+                let output = String::from_utf8_lossy(&buffer[0..n]).to_string();
+
+                // The first output with at the beginning the command itself
+                if !skipped {
+                    if let Some(pos) = output.find('\n') {
+                        // We remove the command line and send everything that follows
+                        let filtered = &output[pos + 1..];
+                        if !filtered.is_empty() {
+                            let _ = output_tx.send(filtered.to_string());
+                        }
+                        skipped = true;
+                    }
+                } else {
+                    // After skipping the command line, we send everything directly
+                    if !output.is_empty() {
+                        let _ = output_tx.send(output);
+                    }
+                }
+                counter = 0;
+            }
+            // Non-blocking error
+            Err(e)
+                if e == nix::errno::Errno::EAGAIN
+                    || e == nix::errno::Errno::EWOULDBLOCK =>
+            {
+                counter += 1;
+            }
+            // Unrecoverable error
+            Err(e) => {
+                if e == nix::errno::Errno::EBADF {
+                    return;
+                }
+                break;
+            }
+            _ => {
+                counter += 1;
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+
+    // If we got here, it means the command has ended
+    let _ = output_tx.send("__COMMAND_END__".to_string());
+}
+
+// Handle asynchronously sending output from the PTY handler to the client
+async fn handle_output_sender(
+    mut output_receiver: tokio::sync::mpsc::UnboundedReceiver<String>,
+    packet_sender: tokio::sync::mpsc::UnboundedSender<(Codes, String)>,
+) {
+    // Continuously receive output from the PTY handler and send it to the client
+    while let Some(output) = output_receiver.recv().await {
+        if output == "__COMMAND_END__" {
+            let _ = packet_sender.send((Codes::CommandEnd, String::new()));
+        } else {
+            let _ = packet_sender.send((Codes::CommandOutput, output));
+        }
+    }
+}
+
+//     A
+//     |
+//     |
+// They are communicating with each other
+//     |
+//     |
+//     v
 
 async fn process_client_commands(conn: &mut SecureConnection) -> io::Result<()> {
     let stream = &mut conn.stream;
 
+    // Create channel for packets to send
+    let (packet_tx, mut packet_rx) = tokio::sync::mpsc::unbounded_channel::<(Codes, String)>();
+
+    // Spawn task to handle output sending
+    if let Some(output_receiver) = conn.output_receiver.take() {
+        tokio::spawn(handle_output_sender(output_receiver, packet_tx));
+    }
+
     loop {
-        // ------------------------------------
-        // EVENTUALLY READING COMMANDS'S OUTPUT
-
-        // This check shouldn't even be here because it checks whether or not some output is available from previous commands
-        if let Some(receiver) = &mut conn.output_receiver {
-            while let Ok(output) = receiver.try_recv() {
-                // Means that the command has ended, so we warn the client
-                if output == "__COMMAND_END__" {
-                    send_encrypted_packet(stream, &conn.cipher, Codes::CommandEnd, "").await?;
-                } else {
-                    send_encrypted_packet(stream, &conn.cipher, Codes::CommandOutput, &output)
-                        .await?;
-                }
+        tokio::select! {
+            // Handle packets to send to client
+            Some((code, data)) = packet_rx.recv() => {
+                send_encrypted_packet(stream, &conn.cipher, code, &data).await?;
             }
-        }
 
-        // ----------------------------
-        // WAITING FOR CLIENTS COMMANDS
-
-        // Read packet or timeout after 5ms - whichever comes first
-        let packet_result = tokio::select! {
-            packet = read_next_packet(stream) => packet,
-            _ = tokio::time::sleep(tokio::time::Duration::from_millis(5)) => continue,
-        };
-
-        // We finally got a packet from the client
-        match packet_result {
-            Ok(packet) => match packet.code {
-                Codes::Disconnect => {
-                    println!("Client requested disconnect");
-                    return Ok(());
-                }
-                Codes::RefreshSession => {
-                    if let Some(receiver) = &mut conn.output_receiver {
-                        while receiver.try_recv().is_ok() {} // Clear the receiver of any previous output
-                    }
-
-                    if let Some(tx) = &conn.command_sender {
-                        let _ = tx.send("__REFRESH__".to_string()); // Send an empty command to refresh the session
-                    }
-                }
-                Codes::Command => {
-                    if let Some(cmd) =
-                        decrypt_message(&conn.cipher, &packet.nonce, &packet.ciphertext)
-                    {
-                        if let Some(tx) = &conn.command_sender {
-                            // Send the command the PTY handler
-                            let _ = tx.send(cmd);
+            // Handle incoming packets from client
+            packet_result = read_next_packet(stream) => {
+                match packet_result {
+                    Ok(packet) => match packet.code {
+                        Codes::Disconnect => {
+                            println!("Client requested disconnect");
+                            return Ok(());
+                        }
+                        Codes::RefreshSession => {
+                            if let Some(tx) = &conn.command_sender {
+                                let _ = tx.send("__REFRESH__".to_string());
+                            }
+                        }
+                        Codes::Command => {
+                            if let Some(cmd) =
+                                decrypt_message(&conn.cipher, &packet.nonce, &packet.ciphertext)
+                            {
+                                if let Some(tx) = &conn.command_sender {
+                                    // We send the command to the PTY handler
+                                    let _ = tx.send(cmd);
+                                }
+                            }
+                        }
+                        _ => {}
+                    },
+                    Err(e) => {
+                        if e.kind() != io::ErrorKind::WouldBlock && e.kind() != io::ErrorKind::TimedOut {
+                            return Err(e);
                         }
                     }
-                }
-                _ => {}
-            },
-            Err(e) => {
-                if e.kind() != io::ErrorKind::WouldBlock && e.kind() != io::ErrorKind::TimedOut {
-                    return Err(e);
                 }
             }
         }
